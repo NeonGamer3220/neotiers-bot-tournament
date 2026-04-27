@@ -10,7 +10,8 @@
     "@discordjs/builders": "^1.7.0",
     "@discordjs/rest": "^2.2.0",
     "discord.js": "^14.14.1",
-    "@supabase/supabase-js": "^2.39.3"
+    "@supabase/supabase-js": "^2.39.3",
+    "dotenv": "^16.4.5"
   },
   "engines": {
     "node": ">=16.0.0"
