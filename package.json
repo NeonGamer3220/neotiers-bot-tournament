@@ -1,0 +1,19 @@
+{
+  "name": "neotiers-bot-tournament",
+  "version": "1.0.0",
+  "description": "Discord bot for managing tournaments",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "@discordjs/builders": "^1.7.0",
+    "@discordjs/rest": "^2.2.0",
+    "discord.js": "^14.14.1",
+    "@supabase/supabase-js": "^2.39.3"
+  },
+  "engines": {
+    "node": ">=16.0.0"
+  }
+}</content>
+<parameter name="filePath">package.json
