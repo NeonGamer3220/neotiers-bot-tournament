@@ -28,8 +28,8 @@ async def tournamentqueue(interaction: discord.Interaction, name: str, timestamp
     embed = discord.Embed(title=f"{name} Tournament", description=f"Csatlakozási határidő: <t:{end_time}:R>", color=0x00FF00)
     embed.add_field(name="Játékosok:", value="None yet")
     
-    join_button = discord.ui.Button(label="Belépés a tournamentbe", style=discord.ButtonStyle.Primary, custom_id="join_tournament_placeholder")
-    leave_button = discord.ui.Button(label="Kilépés a tournamentből", style=discord.ButtonStyle.Secondary, custom_id="leave_tournament_placeholder")
+    join_button = discord.ui.Button(label="Belépés a tournamentbe", style=discord.ButtonStyle.primary, custom_id="join_tournament_placeholder")
+    leave_button = discord.ui.Button(label="Kilépés a tournamentből", style=discord.ButtonStyle.secondary, custom_id="leave_tournament_placeholder")
     view = discord.ui.View()
     view.add_item(join_button)
     view.add_item(leave_button)
@@ -222,8 +222,8 @@ async def start_tournament(tournament_id):
         }
         channel = await guild.create_text_channel(channel_name, category=category, overwrites=overwrites)
         embed = discord.Embed(title="Tournament 1. kör", description=f"{match['p1']['minecraft_username']} vs {match['p2']['minecraft_username']}\nSok sikert!", color=0x0000FF)
-        close_button = discord.ui.Button(label="Close ticket", style=discord.ButtonStyle.Danger, custom_id=f"close_ticket_{tournament_id}_{match['p1']['minecraft_username']}_{match['p2']['minecraft_username']}")
-        result_button = discord.ui.Button(label="eredmény beírása", style=discord.ButtonStyle.Primary, custom_id=f"result_{tournament_id}_{match['p1']['minecraft_username']}_{match['p2']['minecraft_username']}")
+        close_button = discord.ui.Button(label="Close ticket", style=discord.ButtonStyle.danger, custom_id=f"close_ticket_{tournament_id}_{match['p1']['minecraft_username']}_{match['p2']['minecraft_username']}")
+        result_button = discord.ui.Button(label="eredmény beírása", style=discord.ButtonStyle.primary, custom_id=f"result_{tournament_id}_{match['p1']['minecraft_username']}_{match['p2']['minecraft_username']}")
         view = discord.ui.View()
         view.add_item(close_button)
         view.add_item(result_button)
@@ -259,8 +259,8 @@ async def start_round(tournament_id, round_num):
         }
         channel = await guild.create_text_channel(channel_name, category=category, overwrites=overwrites)
         embed = discord.Embed(title=f"Tournament {round_num}. kör", description=f"{match['p1']['minecraft_username']} vs {match['p2']['minecraft_username']}\nSok sikert!", color=0x0000FF)
-        close_button = discord.ui.Button(label="Close ticket", style=discord.ButtonStyle.Danger, custom_id=f"close_ticket_{tournament_id}_{match['p1']['minecraft_username']}_{match['p2']['minecraft_username']}")
-        result_button = discord.ui.Button(label="eredmény beírása", style=discord.ButtonStyle.Primary, custom_id=f"result_{tournament_id}_{match['p1']['minecraft_username']}_{match['p2']['minecraft_username']}")
+        close_button = discord.ui.Button(label="Close ticket", style=discord.ButtonStyle.danger, custom_id=f"close_ticket_{tournament_id}_{match['p1']['minecraft_username']}_{match['p2']['minecraft_username']}")
+        result_button = discord.ui.Button(label="eredmény beírása", style=discord.ButtonStyle.primary, custom_id=f"result_{tournament_id}_{match['p1']['minecraft_username']}_{match['p2']['minecraft_username']}")
         view = discord.ui.View()
         view.add_item(close_button)
         view.add_item(result_button)
