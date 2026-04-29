@@ -1,21 +1,10 @@
-FROM --platform=linux/amd64 node:18-alpine3.18
+FROM --platform=linux/amd64 python:3.11-slim
 
 WORKDIR /app
 
-COPY package*.json ./
-
-RUN npm install --production
-
-COPY . .
-
-CMD ["npm", "start"]
-
-WORKDIR /app
-
-COPY package*.json ./
-
-RUN npm install
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-CMD ["npm", "start"]
+CMD ["python", "index.py"]

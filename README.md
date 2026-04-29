@@ -30,11 +30,11 @@
 - `score` (text)
 - `ticket_channel_id` (text)
 
-3. Run `npm install` to install dependencies.
+3. Run `pip install -r requirements.txt` to install dependencies.
 
-4. Run `node deploy.js` to register the slash commands.
+4. Run `python deploy.py` to register the slash commands.
 
-5. Run `node index.js` to start the bot.
+5. Run `python index.py` to start the bot.
 
 ## Usage
 
