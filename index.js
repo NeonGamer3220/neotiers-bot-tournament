@@ -1,7 +1,8 @@
-require('dotenv').config();
 // Polyfill for ReadableStream to fix undici issues in older Node versions
 const { ReadableStream } = require('node:stream/web');
 global.ReadableStream = ReadableStream;
+
+require('dotenv').config();
 const { Client, GatewayIntentBits, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, StringSelectMenuBuilder, ModalBuilder, TextInputBuilder, TextInputStyle, ChannelType } = require('discord.js');
 const { createClient } = require('@supabase/supabase-js');
 
