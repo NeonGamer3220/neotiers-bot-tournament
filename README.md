@@ -8,7 +8,7 @@
 
 ### linked_accounts
 - `discord_id` (text, primary key)
-- `minecraft_username` (text)
+- `minecraft_name` (text)
 
 ### tournaments
 - `id` (uuid, primary key, default gen_random_uuid())
@@ -18,7 +18,7 @@
 - `status` (text) // 'open', 'active', 'finished'
 - `guild_id` (text)
 - `current_round` (int)
-- `players` (jsonb) // array of {discord_id, minecraft_username}
+- `players` (jsonb) // array of {discord_id, minecraft_name}
 
 ### matches
 - `id` (uuid, primary key, default gen_random_uuid())
