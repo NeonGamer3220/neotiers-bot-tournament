@@ -5,6 +5,7 @@ load_dotenv()
 import discord
 from discord import app_commands
 from supabase import create_client
+from postgrest.exceptions import APIError
 import asyncio
 import time
 
@@ -30,20 +31,19 @@ async def on_ready():
 async def tournamentqueue(interaction: discord.Interaction, name: str, timestamp: str):
     end_time = int(timestamp.replace('<t:', '').replace(':R>', ''))
 
-    response = supabase.table('tournaments').insert({
-        'name': name,
-        'end_time': end_time * 1000,
-        'guild_id': int(os.getenv('GUILD_ID')),
-        'current_round': 0,
-        'players': []
-    }).execute()
-
-    if response.error:
-        print(f"Supabase insert error: {response.error}")
-        await interaction.response.send_message(f"Failed to create tournament: {response.error}", ephemeral=True)
+    try:
+        response = supabase.table('tournaments').insert({
+            'name': name,
+            'end_time': end_time * 1000,
+            'guild_id': int(os.getenv('GUILD_ID')),
+            'current_round': 0,
+            'players': []
+        }).execute()
+        tournament_id = response.data[0]['id']
+    except APIError as e:
+        print(f"Supabase insert error: {e}")
+        await interaction.response.send_message(f"Failed to create tournament: {e}", ephemeral=True)
         return
-
-    tournament_id = response.data[0]['id']
 
     embed = discord.Embed(title=f"{name} Tournament", description=f"Csatlakozási határidő: <t:{end_time}:R>", color=0x00FF00)
     embed.add_field(name="Játékosok:", value="None yet")
@@ -57,10 +57,10 @@ async def tournamentqueue(interaction: discord.Interaction, name: str, timestamp
     await interaction.response.send_message(embed=embed, view=view)
     message = await interaction.original_response()
 
-    # Update tournament with message ID
-    update_response = supabase.table('tournaments').update({'queue_message_id': message.id}).eq('id', tournament_id).execute()
-    if update_response.error:
-        print(f"Failed to update queue_message_id: {update_response.error}")
+    try:
+        supabase.table('tournaments').update({'queue_message_id': message.id}).eq('id', tournament_id).execute()
+    except APIError as e:
+        print(f"Failed to update queue_message_id: {e}")
 
     # Set timer
     delay = end_time * 1000 - time.time() * 1000
@@ -70,18 +70,18 @@ async def tournamentqueue(interaction: discord.Interaction, name: str, timestamp
 
 @client.event
 async def on_interaction(interaction: discord.Interaction):
-    if interaction.type == discord.InteractionType.component:
-        custom_id = interaction.data['custom_id']
+    if interaction.type != discord.InteractionType.component:
+        return
+    custom_id = interaction.data['custom_id']
 
+    try:
         if custom_id.startswith('join_tournament_'):
             tournament_id = custom_id.split('_')[2]
-            # Check linked
             linked_response = supabase.table('linked_accounts').select('minecraft_name').eq('discord_id', interaction.user.id).execute()
             if not linked_response.data:
                 await interaction.response.send_message("You must link your Minecraft account first.", ephemeral=True)
                 return
             minecraft_name = linked_response.data[0]['minecraft_name']
-            # Get tournament
             tournament_response = supabase.table('tournaments').select('*').eq('id', tournament_id).execute()
             if not tournament_response.data or tournament_response.data[0]['status'] != 'open':
                 await interaction.response.send_message("Tournament not open.", ephemeral=True)
@@ -92,12 +92,7 @@ async def on_interaction(interaction: discord.Interaction):
                 await interaction.response.send_message("You already joined.", ephemeral=True)
                 return
             new_players = players + [{'discord_id': interaction.user.id, 'minecraft_name': minecraft_name}]
-            update_response = supabase.table('tournaments').update({'players': new_players}).eq('id', tournament_id).execute()
-            if update_response.error:
-                print(f"Failed to update players: {update_response.error}")
-                await interaction.response.send_message("Failed to join tournament.", ephemeral=True)
-                return
-            # Update embed
+            supabase.table('tournaments').update({'players': new_players}).eq('id', tournament_id).execute()
             channel = interaction.channel
             message = await channel.fetch_message(tournament['queue_message_id'])
             embed = message.embeds[0]
@@ -116,12 +111,7 @@ async def on_interaction(interaction: discord.Interaction):
             tournament = tournament_response.data[0]
             players = tournament['players']
             new_players = [p for p in players if p['discord_id'] != interaction.user.id]
-            update_response = supabase.table('tournaments').update({'players': new_players}).eq('id', tournament_id).execute()
-            if update_response.error:
-                print(f"Failed to update players: {update_response.error}")
-                await interaction.response.send_message("Failed to leave tournament.", ephemeral=True)
-                return
-            # Update embed
+            supabase.table('tournaments').update({'players': new_players}).eq('id', tournament_id).execute()
             channel = interaction.channel
             message = await channel.fetch_message(tournament['queue_message_id'])
             embed = message.embeds[0]
@@ -171,19 +161,22 @@ async def on_interaction(interaction: discord.Interaction):
             p2 = parts[4]
             winner = parts[5]
             score = interaction.data['components'][0]['components'][0]['value']
-            update_response = supabase.table('matches').update({'winner': winner, 'score': score}).eq('tournament_id', tournament_id).eq('player1', p1).eq('player2', p2).execute()
-            if update_response.error:
-                print(f"Failed to update match result: {update_response.error}")
-            # Post to results
+            try:
+                supabase.table('matches').update({'winner': winner, 'score': score}).eq('tournament_id', tournament_id).eq('player1', p1).eq('player2', p2).execute()
+            except APIError as e:
+                print(f"Failed to update match result: {e}")
             results_channel = await client.fetch_channel(int(os.getenv('RESULTS_CHANNEL_ID')))
             await results_channel.send(f"{p1} vs {p2}: {winner} won {score}")
-            # Delete ticket
             match_response = supabase.table('matches').select('ticket_channel_id').eq('tournament_id', tournament_id).eq('player1', p1).eq('player2', p2).execute()
             if match_response.data:
                 channel = await client.fetch_channel(match_response.data[0]['ticket_channel_id'])
                 await channel.delete()
             await check_round_complete(tournament_id)
             await interaction.response.send_message("Result submitted.", ephemeral=True)
+
+    except APIError as e:
+        print(f"Supabase interaction error: {e}")
+        await interaction.response.send_message(f"An error occurred: {e}", ephemeral=True)
 
 class ScoreModal(discord.ui.Modal, title="Enter Score"):
     score = discord.ui.TextInput(label="Score (e.g., 7-3)", style=discord.TextStyle.short, required=True)
@@ -197,13 +190,12 @@ class ScoreModal(discord.ui.Modal, title="Enter Score"):
 
     async def on_submit(self, interaction: discord.Interaction):
         score = self.score.value
-        update_response = supabase.table('matches').update({'winner': self.winner, 'score': score}).eq('tournament_id', self.tournament_id).eq('player1', self.p1).eq('player2', self.p2).execute()
-        if update_response.error:
-            print(f"Failed to update match result: {update_response.error}")
-        # Post to results
+        try:
+            supabase.table('matches').update({'winner': self.winner, 'score': score}).eq('tournament_id', self.tournament_id).eq('player1', self.p1).eq('player2', self.p2).execute()
+        except APIError as e:
+            print(f"Failed to update match result: {e}")
         results_channel = await client.fetch_channel(int(os.getenv('RESULTS_CHANNEL_ID')))
         await results_channel.send(f"{self.p1} vs {self.p2}: {self.winner} won {score}")
-        # Delete ticket
         match_response = supabase.table('matches').select('ticket_channel_id').eq('tournament_id', self.tournament_id).eq('player1', self.p1).eq('player2', self.p2).execute()
         if match_response.data:
             channel = await client.fetch_channel(match_response.data[0]['ticket_channel_id'])
@@ -212,8 +204,12 @@ class ScoreModal(discord.ui.Modal, title="Enter Score"):
         await interaction.response.send_message("Result submitted.", ephemeral=True)
 
 async def start_tournament(tournament_id):
-    tournament_response = supabase.table('tournaments').select('*').eq('id', tournament_id).execute()
-    if not tournament_response.data or tournament_response.data[0]['status'] != 'open':
+    try:
+        tournament_response = supabase.table('tournaments').select('*').eq('id', tournament_id).execute()
+        if not tournament_response.data or tournament_response.data[0]['status'] != 'open':
+            return
+    except APIError as e:
+        print(f"Error starting tournament: {e}")
         return
     supabase.table('tournaments').update({'status': 'active', 'current_round': 1}).eq('id', tournament_id).execute()
     players = tournament_response.data[0]['players']
@@ -241,17 +237,24 @@ async def start_tournament(tournament_id):
         view.add_item(close_button)
         view.add_item(result_button)
         await channel.send(embed=embed, view=view)
-        supabase.table('matches').insert({
-            'tournament_id': tournament_id,
-            'round': 1,
-            'player1': match['p1']['minecraft_name'],
-            'player2': match['p2']['minecraft_name'],
-            'ticket_channel_id': channel.id
-        }).execute()
+        try:
+            supabase.table('matches').insert({
+                'tournament_id': tournament_id,
+                'round': 1,
+                'player1': match['p1']['minecraft_name'],
+                'player2': match['p2']['minecraft_name'],
+                'ticket_channel_id': channel.id
+            }).execute()
+        except APIError as e:
+            print(f"Failed to insert match: {e}")
 
 async def start_round(tournament_id, round_num):
-    tournament_response = supabase.table('tournaments').select('*').eq('id', tournament_id).execute()
-    if not tournament_response.data:
+    try:
+        tournament_response = supabase.table('tournaments').select('*').eq('id', tournament_id).execute()
+        if not tournament_response.data:
+            return
+    except APIError as e:
+        print(f"Error starting round: {e}")
         return
     players = tournament_response.data[0]['players']
     shuffled = players[:]
@@ -278,36 +281,42 @@ async def start_round(tournament_id, round_num):
         view.add_item(close_button)
         view.add_item(result_button)
         await channel.send(embed=embed, view=view)
-        supabase.table('matches').insert({
-            'tournament_id': tournament_id,
-            'round': round_num,
-            'player1': match['p1']['minecraft_name'],
-            'player2': match['p2']['minecraft_name'],
-            'ticket_channel_id': channel.id
-        }).execute()
+        try:
+            supabase.table('matches').insert({
+                'tournament_id': tournament_id,
+                'round': round_num,
+                'player1': match['p1']['minecraft_name'],
+                'player2': match['p2']['minecraft_name'],
+                'ticket_channel_id': channel.id
+            }).execute()
+        except APIError as e:
+            print(f"Failed to insert match: {e}")
 
 async def check_round_complete(tournament_id):
-    tournament_response = supabase.table('tournaments').select('*').eq('id', tournament_id).execute()
-    if not tournament_response.data:
-        return
-    tournament = tournament_response.data[0]
-    round_num = tournament['current_round']
-    matches_response = supabase.table('matches').select('*').eq('tournament_id', tournament_id).eq('round', round_num).execute()
-    all_done = all(m['winner'] for m in matches_response.data)
-    if all_done:
-        winners = [m['winner'] for m in matches_response.data]
-        if len(winners) == 1:
-            results_channel = await client.fetch_channel(int(os.getenv('RESULTS_CHANNEL_ID')))
-            await results_channel.send(f"Tournament winner: {winners[0]}")
-            supabase.table('tournaments').update({'status': 'finished'}).eq('id', tournament_id).execute()
+    try:
+        tournament_response = supabase.table('tournaments').select('*').eq('id', tournament_id).execute()
+        if not tournament_response.data:
             return
-        winners_with_discord = []
-        for w in winners:
-            linked_response = supabase.table('linked_accounts').select('discord_id').eq('minecraft_name', w).execute()
-            if linked_response.data:
-                winners_with_discord.append({'discord_id': linked_response.data[0]['discord_id'], 'minecraft_name': w})
-        supabase.table('tournaments').update({'players': winners_with_discord, 'current_round': round_num + 1}).eq('id', tournament_id).execute()
-        await asyncio.sleep(24 * 60 * 60)
-        await start_round(tournament_id, round_num + 1)
+        tournament = tournament_response.data[0]
+        round_num = tournament['current_round']
+        matches_response = supabase.table('matches').select('*').eq('tournament_id', tournament_id).eq('round', round_num).execute()
+        all_done = all(m['winner'] for m in matches_response.data)
+        if all_done:
+            winners = [m['winner'] for m in matches_response.data]
+            if len(winners) == 1:
+                results_channel = await client.fetch_channel(int(os.getenv('RESULTS_CHANNEL_ID')))
+                await results_channel.send(f"Tournament winner: {winners[0]}")
+                supabase.table('tournaments').update({'status': 'finished'}).eq('id', tournament_id).execute()
+                return
+            winners_with_discord = []
+            for w in winners:
+                linked_response = supabase.table('linked_accounts').select('discord_id').eq('minecraft_name', w).execute()
+                if linked_response.data:
+                    winners_with_discord.append({'discord_id': linked_response.data[0]['discord_id'], 'minecraft_name': w})
+            supabase.table('tournaments').update({'players': winners_with_discord, 'current_round': round_num + 1}).eq('id', tournament_id).execute()
+            await asyncio.sleep(24 * 60 * 60)
+            await start_round(tournament_id, round_num + 1)
+    except APIError as e:
+        print(f"Error in check_round_complete: {e}")
 
 client.run(os.getenv('DISCORD_TOKEN'))
