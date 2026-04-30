@@ -24,45 +24,39 @@ async def on_ready():
 @app_commands.describe(name="Tournament name", timestamp="End timestamp")
 async def tournamentqueue(interaction: discord.Interaction, name: str, timestamp: str):
     end_time = int(timestamp.replace('<t:', '').replace(':R>', ''))
-    
-    embed = discord.Embed(title=f"{name} Tournament", description=f"Csatlakozási határidő: <t:{end_time}:R>", color=0x00FF00)
-    embed.add_field(name="Játékosok:", value="None yet")
-    
-    join_button = discord.ui.Button(label="Belépés a tournamentbe", style=discord.ButtonStyle.primary, custom_id="join_tournament_placeholder")
-    leave_button = discord.ui.Button(label="Kilépés a tournamentből", style=discord.ButtonStyle.secondary, custom_id="leave_tournament_placeholder")
-    view = discord.ui.View()
-    view.add_item(join_button)
-    view.add_item(leave_button)
-    
-    await interaction.response.send_message(embed=embed, view=view)
-    message = await interaction.original_response()
-    
-    # Insert tournament
+
+    # Insert tournament first
     data, error = supabase.table('tournaments').insert({
         'name': name,
         'end_time': end_time * 1000,
-        'queue_message_id': message.id,
         'status': 'open',
         'guild_id': int(os.getenv('GUILD_ID')),
         'current_round': 0,
         'players': []
     }).execute()
-    
+
     if error:
         print(error)
+        await interaction.response.send_message("Failed to create tournament.", ephemeral=True)
         return
-    
+
     tournament_id = data[1][0]['id']
-    
-    # Update buttons
-    join_button.custom_id = f"join_tournament_{tournament_id}"
-    leave_button.custom_id = f"leave_tournament_{tournament_id}"
+
+    embed = discord.Embed(title=f"{name} Tournament", description=f"Csatlakozási határidő: <t:{end_time}:R>", color=0x00FF00)
+    embed.add_field(name="Játékosok:", value="None yet")
+
+    join_button = discord.ui.Button(label="Belépés a tournamentbe", style=discord.ButtonStyle.primary, custom_id=f"join_tournament_{tournament_id}")
+    leave_button = discord.ui.Button(label="Kilépés a tournamentből", style=discord.ButtonStyle.secondary, custom_id=f"leave_tournament_{tournament_id}")
     view = discord.ui.View()
     view.add_item(join_button)
     view.add_item(leave_button)
-    
-    await message.edit(embed=embed, view=view)
-    
+
+    await interaction.response.send_message(embed=embed, view=view)
+    message = await interaction.original_response()
+
+    # Update tournament with message ID
+    supabase.table('tournaments').update({'queue_message_id': message.id}).eq('id', tournament_id).execute()
+
     # Set timer
     delay = end_time * 1000 - time.time() * 1000
     if delay > 0:
