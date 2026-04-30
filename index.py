@@ -13,7 +13,12 @@ intents.guilds = True
 client = discord.Client(intents=intents)
 tree = app_commands.CommandTree(client)
 
-supabase = create_client(os.getenv('SUPABASE_URL'), os.getenv('SUPABASE_ANON_KEY'))
+supabase_url = os.getenv('SUPABASE_URL')
+supabase_key = os.getenv('SUPABASE_SERVICE_ROLE_KEY') or os.getenv('SUPABASE_ANON_KEY')
+if not supabase_url or not supabase_key:
+    raise EnvironmentError("Missing required Supabase environment variables: SUPABASE_URL and either SUPABASE_SERVICE_ROLE_KEY or SUPABASE_ANON_KEY must be set")
+supabase = create_client(supabase_url, supabase_key)
+print(f"Supabase client initialized with {'service role' if os.getenv('SUPABASE_SERVICE_ROLE_KEY') else 'anon'} key")
 
 @client.event
 async def on_ready():
