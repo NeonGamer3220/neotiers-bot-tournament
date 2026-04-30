@@ -1,0 +1,30 @@
+-- Create the tournaments table
+CREATE TABLE tournaments (
+    id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+    name TEXT NOT NULL,
+    end_time BIGINT NOT NULL,
+    queue_message_id BIGINT,
+    status TEXT DEFAULT 'open',
+    guild_id BIGINT NOT NULL,
+    current_round INTEGER DEFAULT 0,
+    players JSONB DEFAULT '[]'::jsonb
+);
+
+-- Create the linked_accounts table
+CREATE TABLE linked_accounts (
+    id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+    discord_id BIGINT UNIQUE NOT NULL,
+    minecraft_name TEXT NOT NULL
+);
+
+-- Create the matches table
+CREATE TABLE matches (
+    id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+    tournament_id UUID REFERENCES tournaments(id) ON DELETE CASCADE,
+    round INTEGER NOT NULL,
+    player1 TEXT NOT NULL,
+    player2 TEXT NOT NULL,
+    winner TEXT,
+    score TEXT,
+    ticket_channel_id BIGINT
+);
