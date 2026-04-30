@@ -40,8 +40,8 @@ async def tournamentqueue(interaction: discord.Interaction, name: str, timestamp
     }).execute()
 
     if error:
-        print(error)
-        await interaction.response.send_message("Failed to create tournament.", ephemeral=True)
+        print(f"Supabase insert error: {error}")
+        await interaction.response.send_message(f"Failed to create tournament: {error}", ephemeral=True)
         return
 
     tournament_id = data[1][0]['id']
