@@ -29,7 +29,6 @@ async def tournamentqueue(interaction: discord.Interaction, name: str, timestamp
     data, error = supabase.table('tournaments').insert({
         'name': name,
         'end_time': end_time * 1000,
-        'status': 'open',
         'guild_id': int(os.getenv('GUILD_ID')),
         'current_round': 0,
         'players': []
