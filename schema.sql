@@ -10,6 +10,9 @@ CREATE TABLE IF NOT EXISTS tournaments (
     players JSONB DEFAULT '[]'::jsonb
 );
 
+-- Disable RLS for tournaments table
+ALTER TABLE tournaments DISABLE ROW LEVEL SECURITY;
+
 -- Add missing columns to tournaments table if they don't exist
 ALTER TABLE tournaments ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'open';
 ALTER TABLE tournaments ADD COLUMN IF NOT EXISTS guild_id BIGINT;
@@ -23,6 +26,9 @@ CREATE TABLE IF NOT EXISTS linked_accounts (
     minecraft_name TEXT NOT NULL
 );
 
+-- Disable RLS for linked_accounts table
+ALTER TABLE linked_accounts DISABLE ROW LEVEL SECURITY;
+
 -- Create the matches table (if not exists)
 CREATE TABLE IF NOT EXISTS matches (
     id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
@@ -34,3 +40,6 @@ CREATE TABLE IF NOT EXISTS matches (
     score TEXT,
     ticket_channel_id BIGINT
 );
+
+-- Disable RLS for matches table
+ALTER TABLE matches DISABLE ROW LEVEL SECURITY;
