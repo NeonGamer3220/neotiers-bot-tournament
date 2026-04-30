@@ -1,5 +1,5 @@
--- Create the tournaments table
-CREATE TABLE tournaments (
+-- Create the tournaments table (if not exists)
+CREATE TABLE IF NOT EXISTS tournaments (
     id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
     name TEXT NOT NULL,
     end_time BIGINT NOT NULL,
@@ -10,15 +10,21 @@ CREATE TABLE tournaments (
     players JSONB DEFAULT '[]'::jsonb
 );
 
--- Create the linked_accounts table
-CREATE TABLE linked_accounts (
+-- Add missing columns to tournaments table if they don't exist
+ALTER TABLE tournaments ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'open';
+ALTER TABLE tournaments ADD COLUMN IF NOT EXISTS guild_id BIGINT;
+ALTER TABLE tournaments ADD COLUMN IF NOT EXISTS current_round INTEGER DEFAULT 0;
+ALTER TABLE tournaments ADD COLUMN IF NOT EXISTS players JSONB DEFAULT '[]'::jsonb;
+
+-- Create the linked_accounts table (if not exists)
+CREATE TABLE IF NOT EXISTS linked_accounts (
     id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
     discord_id BIGINT UNIQUE NOT NULL,
     minecraft_name TEXT NOT NULL
 );
 
--- Create the matches table
-CREATE TABLE matches (
+-- Create the matches table (if not exists)
+CREATE TABLE IF NOT EXISTS matches (
     id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
     tournament_id UUID REFERENCES tournaments(id) ON DELETE CASCADE,
     round INTEGER NOT NULL,
