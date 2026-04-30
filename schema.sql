@@ -43,3 +43,9 @@ CREATE TABLE IF NOT EXISTS matches (
 
 -- Disable RLS for matches table
 ALTER TABLE matches DISABLE ROW LEVEL SECURITY;
+
+-- Grant permissions to anon role
+GRANT USAGE ON SCHEMA public TO anon;
+GRANT ALL ON tournaments TO anon;
+GRANT ALL ON linked_accounts TO anon;
+GRANT ALL ON matches TO anon;
