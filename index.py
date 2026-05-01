@@ -24,14 +24,40 @@ print(f"Supabase initialized with {'service_role' if os.getenv('SUPABASE_SERVICE
 @client.event
 async def on_ready():
     try:
-        guild_id = int(os.getenv('GUILD_ID'))
+        import sys
+        print(f'Logged in as {client.user} (ID: {client.user.id})')
+        guilds = [g.id for g in client.guilds]
+        print(f'Bot is in guilds: {guilds}')
+        sys.stdout.flush()
+        
+        guild_id_env = os.getenv('GUILD_ID')
+        print(f'GUILD_ID from env: {guild_id_env}')
+        sys.stdout.flush()
+        
+        guild_id = int(guild_id_env)
+        guild = client.get_guild(guild_id)
+        if not guild:
+            print(f'ERROR: Bot is NOT in the configured guild {guild_id}. Commands will not sync.')
+            print(f'Available guilds: {guilds}')
+            sys.stdout.flush()
+            return
+        
+        print(f'Syncing commands to guild: {guild.name} (ID: {guild_id})')
+        sys.stdout.flush()
         await tree.sync(guild=discord.Object(id=guild_id))
-        print(f'Logged in as {client.user}')
-        # Verify registered commands
+        print(f'Command sync complete')
+        sys.stdout.flush()
+        
         commands = await tree.fetch_commands(guild=discord.Object(id=guild_id))
-        print(f"Registered commands: {[cmd.name for cmd in commands]}")
+        cmd_names = [cmd.name for cmd in commands]
+        print(f"Registered commands: {cmd_names}")
+        print(f"Total commands: {len(cmd_names)}")
+        sys.stdout.flush()
     except Exception as e:
-        print(f"Error syncing commands: {e}")
+        import traceback
+        print(f'ERROR in on_ready: {e}')
+        traceback.print_exc()
+        sys.stdout.flush()
 
 @tree.command(name="tournamentqueue", description="Create a tournament queue")
 @app_commands.describe(name="Tournament name", timestamp="End timestamp")
@@ -74,7 +100,10 @@ async def tournamentqueue(interaction: discord.Interaction, name: str, timestamp
     if delay > 0:
         await asyncio.sleep(delay / 1000)
     # Start tournament regardless (if delay <= 0, start immediately)
-    await start_tournament(tournament_id)
+    try:
+        await start_tournament(tournament_id)
+    except Exception as e:
+        print(f"Error auto-starting tournament: {e}")
 
 @tree.command(name="tournamentround", description="Start or stop a tournament round manually")
 @app_commands.describe(
@@ -163,6 +192,9 @@ async def tournamentround(interaction: discord.Interaction, action: str, tournam
             
             supabase.table('tournaments').update({'current_round': round_number, 'status': 'active'}).eq('id', tournament_uuid).execute()
             await interaction.followup.send(f"Round {round_number} started with {len(matches)} matches.", ephemeral=True)
+        except Exception as e:
+            print(f"Error in tournamentround start: {e}")
+            await interaction.followup.send(f"Error: {e}", ephemeral=True)
             
         elif action.lower() == 'stop':
             matches_response = supabase.table('matches').select('*').eq('tournament_id', tournament_uuid).eq('round', round_number).execute()
@@ -186,7 +218,10 @@ async def tournamentround(interaction: discord.Interaction, action: str, tournam
             
     except APIError as e:
         print(f"Error in tournamentround: {e}")
-        await interaction.followup.send(f"An error occurred: {e}", ephemeral=True)
+        await interaction.followup.send(f"Database error: {e}", ephemeral=True)
+    except Exception as e:
+        print(f"Unexpected error in tournamentround: {e}")
+        await interaction.followup.send(f"Error: {e}", ephemeral=True)
 
 
 @tree.command(name="tournamentaddticket", description="Add all tournament players to their ticket channels (debug)")
@@ -508,99 +543,115 @@ async def start_tournament(tournament_id):
         print(f"Error starting tournament: {e}")
         return
     
-    supabase.table('tournaments').update({'status': 'active', 'current_round': 1}).eq('id', tournament_id).execute()
-    players = tournament_response.data[0]['players']
-    
-    if len(players) < 2:
-        print(f"Not enough players to start tournament {tournament_id}")
-        return
-    
-    shuffled = players[:]
-    import random
-    random.shuffle(shuffled)
-    matches = []
-    for i in range(0, len(shuffled), 2):
-        if i + 1 < len(shuffled):
-            matches.append({'p1': shuffled[i], 'p2': shuffled[i+1]})
-    
-    # Update the original tournament embed with round 1 info
     try:
-        queue_message_id = tournament_response.data[0].get('queue_message_id')
-        if queue_message_id:
-            guild = client.get_guild(int(os.getenv('GUILD_ID')))
-            for ch in guild.text_channels:
-                try:
-                    msg = await ch.fetch_message(queue_message_id)
-                    embed = discord.Embed(
-                        title=f"{tournament_response.data[0]['name']} Tournament - 1. kör",
-                        color=0x00FF00
-                    )
-                    embed.add_field(name="Játékosok:", value=str(len(players)))
-                    matches_text = ""
-                    for match in matches:
-                        p1 = match['p1']
-                        p2 = match['p2']
-                        matches_text += f"<@{p1['discord_id']}> vs <@{p2['discord_id']}>\n"
-                    embed.add_field(name="Meccsek:", value=matches_text or "Nincsenek meccsek")
-                    await msg.edit(embed=embed, view=None)
-                    break
-                except:
-                    continue
-    except Exception as e:
-        print(f"Failed to update queue message: {e}")
-    
-    guild = client.get_guild(int(os.getenv('GUILD_ID')))
-    category_id = int(os.getenv('TICKET_CATEGORY_ID'))
-    category = guild.get_channel(category_id)
-    if not category or not isinstance(category, discord.CategoryChannel):
-        print(f"Invalid ticket category: {category_id}")
-        return
-    
-    for match in matches:
-        channel_name = f"t-r1-{match['p1']['minecraft_name']}-{match['p2']['minecraft_name']}"
-        overwrites = {
-            guild.default_role: discord.PermissionOverwrite(view_channel=False, send_messages=False)
-        }
-        bot_member = guild.get_member(client.user.id)
-        if bot_member:
-            overwrites[bot_member] = discord.PermissionOverwrite(
-                view_channel=True,
-                send_messages=True,
-                manage_channels=True,
-                manage_permissions=True,
-                read_message_history=True
-            )
-        p1_member = guild.get_member(match['p1']['discord_id'])
-        p2_member = guild.get_member(match['p2']['discord_id'])
-        if p1_member:
-            overwrites[p1_member] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True)
-        if p2_member:
-            overwrites[p2_member] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True)
+        supabase.table('tournaments').update({'status': 'active', 'current_round': 1}).eq('id', tournament_id).execute()
+        players = tournament_response.data[0]['players']
         
-        try:
-            channel = await guild.create_text_channel(channel_name, category=category, overwrites=overwrites)
-        except discord.Forbidden:
-            print("Bot lacks permission to create channels in ticket category")
+        if len(players) < 2:
+            print(f"Not enough players to start tournament {tournament_id}")
             return
         
-        embed = discord.Embed(title="Tournament 1. kör", description=f"{match['p1']['minecraft_name']} vs {match['p2']['minecraft_name']}\nSok sikert!", color=0x0000FF)
-        close_button = discord.ui.Button(label="Close ticket", style=discord.ButtonStyle.danger, custom_id=f"close_ticket_{tournament_id}_{match['p1']['minecraft_name']}_{match['p2']['minecraft_name']}")
-        result_button = discord.ui.Button(label="eredmény beírása", style=discord.ButtonStyle.primary, custom_id=f"result_{tournament_id}_{match['p1']['minecraft_name']}_{match['p2']['minecraft_name']}")
-        view = discord.ui.View()
-        view.add_item(close_button)
-        view.add_item(result_button)
-        await channel.send(embed=embed, view=view)
+        shuffled = players[:]
+        import random
+        random.shuffle(shuffled)
+        matches = []
+        for i in range(0, len(shuffled), 2):
+            if i + 1 < len(shuffled):
+                matches.append({'p1': shuffled[i], 'p2': shuffled[i+1]})
         
+        # Update the original tournament embed with round 1 info
         try:
-            supabase.table('matches').insert({
-                'tournament_id': tournament_id,
-                'round': 1,
-                'player1': match['p1']['minecraft_name'],
-                'player2': match['p2']['minecraft_name'],
-                'ticket_channel_id': channel.id
-            }).execute()
-        except APIError as e:
-            print(f"Failed to insert match: {e}")
+            queue_message_id = tournament_response.data[0].get('queue_message_id')
+            if queue_message_id:
+                guild = client.get_guild(int(os.getenv('GUILD_ID')))
+                if not guild:
+                    print("Bot not in guild - check GUILD_ID")
+                    return
+                for ch in guild.text_channels:
+                    try:
+                        msg = await ch.fetch_message(queue_message_id)
+                        embed = discord.Embed(
+                            title=f"{tournament_response.data[0]['name']} Tournament - 1. kör",
+                            color=0x00FF00
+                        )
+                        embed.add_field(name="Játékosok:", value=str(len(players)))
+                        matches_text = ""
+                        for match in matches:
+                            p1 = match['p1']
+                            p2 = match['p2']
+                            matches_text += f"<@{p1['discord_id']}> vs <@{p2['discord_id']}>\n"
+                        embed.add_field(name="Meccsek:", value=matches_text or "Nincsenek meccsek")
+                        await msg.edit(embed=embed, view=None)
+                        break
+                    except Exception as e:
+                        continue
+        except Exception as e:
+            print(f"Failed to update queue message: {e}")
+        
+        guild = client.get_guild(int(os.getenv('GUILD_ID')))
+        if not guild:
+            print("Bot not in guild - check GUILD_ID")
+            return
+        category_id = int(os.getenv('TICKET_CATEGORY_ID'))
+        category = guild.get_channel(category_id)
+        if not category or not isinstance(category, discord.CategoryChannel):
+            print(f"Invalid ticket category: {category_id}")
+            return
+        
+        for match in matches:
+            channel_name = f"t-r1-{match['p1']['minecraft_name']}-{match['p2']['minecraft_name']}"
+            overwrites = {
+                guild.default_role: discord.PermissionOverwrite(view_channel=False, send_messages=False)
+            }
+            bot_member = guild.get_member(client.user.id)
+            if bot_member:
+                overwrites[bot_member] = discord.PermissionOverwrite(
+                    view_channel=True,
+                    send_messages=True,
+                    manage_channels=True,
+                    manage_permissions=True,
+                    read_message_history=True
+                )
+            p1_member = guild.get_member(match['p1']['discord_id'])
+            p2_member = guild.get_member(match['p2']['discord_id'])
+            if p1_member:
+                overwrites[p1_member] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True)
+            if p2_member:
+                overwrites[p2_member] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True)
+            
+            try:
+                channel = await guild.create_text_channel(channel_name, category=category, overwrites=overwrites)
+            except discord.Forbidden:
+                print("Bot lacks permission to create channels in ticket category")
+                return
+            except Exception as e:
+                print(f"Error creating channel: {e}")
+                return
+            
+            embed = discord.Embed(title="Tournament 1. kör", description=f"{match['p1']['minecraft_name']} vs {match['p2']['minecraft_name']}\nSok sikert!", color=0x0000FF)
+            close_button = discord.ui.Button(label="Close ticket", style=discord.ButtonStyle.danger, custom_id=f"close_ticket_{tournament_id}_{match['p1']['minecraft_name']}_{match['p2']['minecraft_name']}")
+            result_button = discord.ui.Button(label="eredmény beírása", style=discord.ButtonStyle.primary, custom_id=f"result_{tournament_id}_{match['p1']['minecraft_name']}_{match['p2']['minecraft_name']}")
+            view = discord.ui.View()
+            view.add_item(close_button)
+            view.add_item(result_button)
+            try:
+                await channel.send(embed=embed, view=view)
+            except Exception as e:
+                print(f"Failed to send embed to channel: {e}")
+                return
+            
+            try:
+                supabase.table('matches').insert({
+                    'tournament_id': tournament_id,
+                    'round': 1,
+                    'player1': match['p1']['minecraft_name'],
+                    'player2': match['p2']['minecraft_name'],
+                    'ticket_channel_id': channel.id
+                }).execute()
+            except APIError as e:
+                print(f"Failed to insert match: {e}")
+    except Exception as e:
+        print(f"Unexpected error in start_tournament: {e}")
 
 async def start_round(tournament_id, round_num):
     try:
@@ -611,99 +662,115 @@ async def start_round(tournament_id, round_num):
         print(f"Error starting round: {e}")
         return
     
-    players = tournament_response.data[0]['players']
-    
-    if len(players) < 2:
-        print(f"Not enough players to start round {round_num}")
-        return
-    
-    # Generate matches
-    shuffled = players[:]
-    import random
-    random.shuffle(shuffled)
-    matches = []
-    for i in range(0, len(shuffled), 2):
-        if i + 1 < len(shuffled):
-            matches.append({'p1': shuffled[i], 'p2': shuffled[i+1]})
-    
-    # Update the original tournament embed with new round info
     try:
-        queue_message_id = tournament_response.data[0].get('queue_message_id')
-        if queue_message_id:
-            guild = client.get_guild(int(os.getenv('GUILD_ID')))
-            for ch in guild.text_channels:
-                try:
-                    msg = await ch.fetch_message(queue_message_id)
-                    embed = discord.Embed(
-                        title=f"{tournament_response.data[0]['name']} Tournament - {round_num}. kör",
-                        color=0x00FF00
-                    )
-                    embed.add_field(name="Játékosok:", value=str(len(players)))
-                    matches_text = ""
-                    for match in matches:
-                        p1 = match['p1']
-                        p2 = match['p2']
-                        matches_text += f"<@{p1['discord_id']}> vs <@{p2['discord_id']}>\n"
-                    embed.add_field(name="Meccsek:", value=matches_text or "Nincsenek meccsek")
-                    await msg.edit(embed=embed, view=None)
-                    break
-                except:
-                    continue
-    except Exception as e:
-        print(f"Failed to update queue message: {e}")
-    
-    guild = client.get_guild(int(os.getenv('GUILD_ID')))
-    category_id = int(os.getenv('TICKET_CATEGORY_ID'))
-    category = guild.get_channel(category_id)
-    if not category or not isinstance(category, discord.CategoryChannel):
-        print(f"Invalid ticket category: {category_id}")
-        return
-    
-    for match in matches:
-        channel_name = f"t-r{round_num}-{match['p1']['minecraft_name']}-{match['p2']['minecraft_name']}"
-        overwrites = {
-            guild.default_role: discord.PermissionOverwrite(view_channel=False, send_messages=False)
-        }
-        bot_member = guild.get_member(client.user.id)
-        if bot_member:
-            overwrites[bot_member] = discord.PermissionOverwrite(
-                view_channel=True,
-                send_messages=True,
-                manage_channels=True,
-                manage_permissions=True,
-                read_message_history=True
-            )
-        p1_member = guild.get_member(match['p1']['discord_id'])
-        p2_member = guild.get_member(match['p2']['discord_id'])
-        if p1_member:
-            overwrites[p1_member] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True)
-        if p2_member:
-            overwrites[p2_member] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True)
+        players = tournament_response.data[0]['players']
         
-        try:
-            channel = await guild.create_text_channel(channel_name, category=category, overwrites=overwrites)
-        except discord.Forbidden:
-            print("Bot lacks permission to create channels in ticket category")
+        if len(players) < 2:
+            print(f"Not enough players to start round {round_num}")
             return
         
-        embed = discord.Embed(title=f"Tournament {round_num}. kör", description=f"{match['p1']['minecraft_name']} vs {match['p2']['minecraft_name']}\nSok sikert!", color=0x0000FF)
-        close_button = discord.ui.Button(label="Close ticket", style=discord.ButtonStyle.danger, custom_id=f"close_ticket_{tournament_id}_{match['p1']['minecraft_name']}_{match['p2']['minecraft_name']}")
-        result_button = discord.ui.Button(label="eredmény beírása", style=discord.ButtonStyle.primary, custom_id=f"result_{tournament_id}_{match['p1']['minecraft_name']}_{match['p2']['minecraft_name']}")
-        view = discord.ui.View()
-        view.add_item(close_button)
-        view.add_item(result_button)
-        await channel.send(embed=embed, view=view)
+        # Generate matches
+        shuffled = players[:]
+        import random
+        random.shuffle(shuffled)
+        matches = []
+        for i in range(0, len(shuffled), 2):
+            if i + 1 < len(shuffled):
+                matches.append({'p1': shuffled[i], 'p2': shuffled[i+1]})
         
+        # Update the original tournament embed with new round info
         try:
-            supabase.table('matches').insert({
-                'tournament_id': tournament_id,
-                'round': round_num,
-                'player1': match['p1']['minecraft_name'],
-                'player2': match['p2']['minecraft_name'],
-                'ticket_channel_id': channel.id
-            }).execute()
-        except APIError as e:
-            print(f"Failed to insert match: {e}")
+            queue_message_id = tournament_response.data[0].get('queue_message_id')
+            if queue_message_id:
+                guild = client.get_guild(int(os.getenv('GUILD_ID')))
+                if not guild:
+                    print("Bot not in guild - check GUILD_ID")
+                    return
+                for ch in guild.text_channels:
+                    try:
+                        msg = await ch.fetch_message(queue_message_id)
+                        embed = discord.Embed(
+                            title=f"{tournament_response.data[0]['name']} Tournament - {round_num}. kör",
+                            color=0x00FF00
+                        )
+                        embed.add_field(name="Játékosok:", value=str(len(players)))
+                        matches_text = ""
+                        for match in matches:
+                            p1 = match['p1']
+                            p2 = match['p2']
+                            matches_text += f"<@{p1['discord_id']}> vs <@{p2['discord_id']}>\n"
+                        embed.add_field(name="Meccsek:", value=matches_text or "Nincsenek meccsek")
+                        await msg.edit(embed=embed, view=None)
+                        break
+                    except Exception as e:
+                        continue
+        except Exception as e:
+            print(f"Failed to update queue message: {e}")
+        
+        guild = client.get_guild(int(os.getenv('GUILD_ID')))
+        if not guild:
+            print("Bot not in guild - check GUILD_ID")
+            return
+        category_id = int(os.getenv('TICKET_CATEGORY_ID'))
+        category = guild.get_channel(category_id)
+        if not category or not isinstance(category, discord.CategoryChannel):
+            print(f"Invalid ticket category: {category_id}")
+            return
+        
+        for match in matches:
+            channel_name = f"t-r{round_num}-{match['p1']['minecraft_name']}-{match['p2']['minecraft_name']}"
+            overwrites = {
+                guild.default_role: discord.PermissionOverwrite(view_channel=False, send_messages=False)
+            }
+            bot_member = guild.get_member(client.user.id)
+            if bot_member:
+                overwrites[bot_member] = discord.PermissionOverwrite(
+                    view_channel=True,
+                    send_messages=True,
+                    manage_channels=True,
+                    manage_permissions=True,
+                    read_message_history=True
+                )
+            p1_member = guild.get_member(match['p1']['discord_id'])
+            p2_member = guild.get_member(match['p2']['discord_id'])
+            if p1_member:
+                overwrites[p1_member] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True)
+            if p2_member:
+                overwrites[p2_member] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True)
+            
+            try:
+                channel = await guild.create_text_channel(channel_name, category=category, overwrites=overwrites)
+            except discord.Forbidden:
+                print("Bot lacks permission to create channels in ticket category")
+                return
+            except Exception as e:
+                print(f"Error creating channel: {e}")
+                return
+            
+            embed = discord.Embed(title=f"Tournament {round_num}. kör", description=f"{match['p1']['minecraft_name']} vs {match['p2']['minecraft_name']}\nSok sikert!", color=0x0000FF)
+            close_button = discord.ui.Button(label="Close ticket", style=discord.ButtonStyle.danger, custom_id=f"close_ticket_{tournament_id}_{match['p1']['minecraft_name']}_{match['p2']['minecraft_name']}")
+            result_button = discord.ui.Button(label="eredmény beírása", style=discord.ButtonStyle.primary, custom_id=f"result_{tournament_id}_{match['p1']['minecraft_name']}_{match['p2']['minecraft_name']}")
+            view = discord.ui.View()
+            view.add_item(close_button)
+            view.add_item(result_button)
+            try:
+                await channel.send(embed=embed, view=view)
+            except Exception as e:
+                print(f"Failed to send embed to channel: {e}")
+                return
+            
+            try:
+                supabase.table('matches').insert({
+                    'tournament_id': tournament_id,
+                    'round': round_num,
+                    'player1': match['p1']['minecraft_name'],
+                    'player2': match['p2']['minecraft_name'],
+                    'ticket_channel_id': channel.id
+                }).execute()
+            except APIError as e:
+                print(f"Failed to insert match: {e}")
+    except Exception as e:
+        print(f"Unexpected error in start_round: {e}")
 
 async def check_round_complete(tournament_id):
     try:
@@ -728,7 +795,10 @@ async def check_round_complete(tournament_id):
                     winners_with_discord.append({'discord_id': linked_response.data[0]['discord_id'], 'minecraft_name': w})
             supabase.table('tournaments').update({'players': winners_with_discord, 'current_round': round_num + 1}).eq('id', tournament_id).execute()
             await asyncio.sleep(24 * 60 * 60)
-            await start_round(tournament_id, round_num + 1)
+            try:
+                await start_round(tournament_id, round_num + 1)
+            except Exception as e:
+                print(f"Error starting next round: {e}")
     except APIError as e:
         print(f"Error in check_round_complete: {e}")
 
