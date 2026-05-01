@@ -181,6 +181,10 @@ async def tournamentround(interaction: discord.Interaction, action: str, tournam
     except APIError as e:
         print(f"Error in tournamentround: {e}")
         await interaction.followup.send(f"An error occurred: {e}", ephemeral=True)
+
+
+@client.event
+async def on_interaction(interaction: discord.Interaction):
     if interaction.type != discord.InteractionType.component:
         return
     custom_id = interaction.data['custom_id']
@@ -282,33 +286,16 @@ async def tournamentround(interaction: discord.Interaction, action: str, tournam
             modal = ScoreModal(tournament_id, p1, p2, winner)
             await interaction.response.send_modal(modal)
 
-        elif custom_id.startswith('score_modal_'):
-            parts = custom_id.split('_')
-            tournament_id = parts[2]
-            p1 = parts[3]
-            p2 = parts[4]
-            winner = parts[5]
-            score = interaction.data['components'][0]['components'][0]['value']
-            try:
-                supabase.table('matches').update({'winner': winner, 'score': score}).eq('tournament_id', tournament_id).eq('player1', p1).eq('player2', p2).execute()
-            except APIError as e:
-                print(f"Failed to update match result: {e}")
-            results_channel = await client.fetch_channel(int(os.getenv('RESULTS_CHANNEL_ID')))
-            await results_channel.send(f"{p1} vs {p2}: {winner} won {score}")
-            match_response = supabase.table('matches').select('ticket_channel_id').eq('tournament_id', tournament_id).eq('player1', p1).eq('player2', p2).execute()
-            if match_response.data:
-                channel = await client.fetch_channel(match_response.data[0]['ticket_channel_id'])
-                if channel:
-                    await channel.delete()
-            await check_round_complete(tournament_id)
-            try:
-                await interaction.response.send_message("Result submitted.", ephemeral=True)
-            except Exception:
-                await interaction.followup.send("Result submitted.", ephemeral=True)
-
     except APIError as e:
         print(f"Supabase interaction error: {e}")
-        await interaction.response.send_message(f"An error occurred: {e}", ephemeral=True)
+        try:
+            await interaction.response.send_message(f"An error occurred: {e}", ephemeral=True)
+        except:
+            try:
+                await interaction.followup.send(f"An error occurred: {e}", ephemeral=True)
+            except:
+                pass
+
 
 class ScoreModal(discord.ui.Modal, title="Enter Score"):
     score = discord.ui.TextInput(label="Score (e.g., 7-3)", style=discord.TextStyle.short, required=True)
@@ -321,6 +308,7 @@ class ScoreModal(discord.ui.Modal, title="Enter Score"):
         self.winner = winner
 
     async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
         score = self.score.value
         try:
             supabase.table('matches').update({'winner': self.winner, 'score': score}).eq('tournament_id', self.tournament_id).eq('player1', self.p1).eq('player2', self.p2).execute()
@@ -334,10 +322,8 @@ class ScoreModal(discord.ui.Modal, title="Enter Score"):
             if channel:
                 await channel.delete()
         await check_round_complete(self.tournament_id)
-        try:
-            await interaction.response.send_message("Result submitted.", ephemeral=True)
-        except Exception:
-            await interaction.followup.send("Result submitted.", ephemeral=True)
+        await interaction.followup.send("Result submitted.", ephemeral=True)
+
 
 async def start_tournament(tournament_id):
     try:
