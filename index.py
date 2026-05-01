@@ -355,41 +355,6 @@ async def start_tournament(tournament_id):
         print(f"Not enough players to start tournament {tournament_id}")
         return
     
-    # Update the original tournament embed
-    try:
-        queue_message_id = tournament_response.data[0].get('queue_message_id')
-        if queue_message_id:
-            guild = client.get_guild(int(os.getenv('GUILD_ID')))
-            channel_id = int(os.getenv('RESULTS_CHANNEL_ID'))  # Use results channel or find from message
-            # Actually need to find which channel the queue message was sent in
-            # Since we stored queue_message_id, we need guild and channel
-            # The message was sent in the same channel as the command, we can search all channels
-            for ch in guild.text_channels:
-                try:
-                    msg = await ch.fetch_message(queue_message_id)
-                    embed = discord.Embed(
-                        title=f"{tournament_response.data[0]['name']} Tournament - {round_num}. kör",
-                        color=0x00FF00
-                    )
-                    embed.add_field(name="Játékosok:", value=str(len(players)))
-                    matches_text = ""
-                    shuffled = players[:]
-                    import random
-                    random.shuffle(shuffled)
-                    for i in range(0, len(shuffled), 2):
-                        if i + 1 < len(shuffled):
-                            p1 = shuffled[i]
-                            p2 = shuffled[i+1]
-                            matches_text += f"<@{p1['discord_id']}> vs <@{p2['discord_id']}>\n"
-                    embed.add_field(name="Meccsek:", value=matches_text or "Nincsenek meccsek")
-                    # Remove buttons by sending new embed without view or editing view
-                    await msg.edit(embed=embed, view=None)
-                    break
-                except:
-                    continue
-    except Exception as e:
-        print(f"Failed to update queue message: {e}")
-    
     shuffled = players[:]
     import random
     random.shuffle(shuffled)
@@ -397,6 +362,32 @@ async def start_tournament(tournament_id):
     for i in range(0, len(shuffled), 2):
         if i + 1 < len(shuffled):
             matches.append({'p1': shuffled[i], 'p2': shuffled[i+1]})
+    
+    # Update the original tournament embed with round 1 info
+    try:
+        queue_message_id = tournament_response.data[0].get('queue_message_id')
+        if queue_message_id:
+            guild = client.get_guild(int(os.getenv('GUILD_ID')))
+            for ch in guild.text_channels:
+                try:
+                    msg = await ch.fetch_message(queue_message_id)
+                    embed = discord.Embed(
+                        title=f"{tournament_response.data[0]['name']} Tournament - 1. kör",
+                        color=0x00FF00
+                    )
+                    embed.add_field(name="Játékosok:", value=str(len(players)))
+                    matches_text = ""
+                    for match in matches:
+                        p1 = match['p1']
+                        p2 = match['p2']
+                        matches_text += f"<@{p1['discord_id']}> vs <@{p2['discord_id']}>\n"
+                    embed.add_field(name="Meccsek:", value=matches_text or "Nincsenek meccsek")
+                    await msg.edit(embed=embed, view=None)
+                    break
+                except:
+                    continue
+    except Exception as e:
+        print(f"Failed to update queue message: {e}")
     
     guild = client.get_guild(int(os.getenv('GUILD_ID')))
     category_id = int(os.getenv('TICKET_CATEGORY_ID'))
@@ -466,6 +457,15 @@ async def start_round(tournament_id, round_num):
         print(f"Not enough players to start round {round_num}")
         return
     
+    # Generate matches
+    shuffled = players[:]
+    import random
+    random.shuffle(shuffled)
+    matches = []
+    for i in range(0, len(shuffled), 2):
+        if i + 1 < len(shuffled):
+            matches.append({'p1': shuffled[i], 'p2': shuffled[i+1]})
+    
     # Update the original tournament embed with new round info
     try:
         queue_message_id = tournament_response.data[0].get('queue_message_id')
@@ -480,14 +480,10 @@ async def start_round(tournament_id, round_num):
                     )
                     embed.add_field(name="Játékosok:", value=str(len(players)))
                     matches_text = ""
-                    shuffled = players[:]
-                    import random
-                    random.shuffle(shuffled)
-                    for i in range(0, len(shuffled), 2):
-                        if i + 1 < len(shuffled):
-                            p1 = shuffled[i]
-                            p2 = shuffled[i+1]
-                            matches_text += f"<@{p1['discord_id']}> vs <@{p2['discord_id']}>\n"
+                    for match in matches:
+                        p1 = match['p1']
+                        p2 = match['p2']
+                        matches_text += f"<@{p1['discord_id']}> vs <@{p2['discord_id']}>\n"
                     embed.add_field(name="Meccsek:", value=matches_text or "Nincsenek meccsek")
                     await msg.edit(embed=embed, view=None)
                     break
@@ -495,14 +491,6 @@ async def start_round(tournament_id, round_num):
                     continue
     except Exception as e:
         print(f"Failed to update queue message: {e}")
-    
-    shuffled = players[:]
-    import random
-    random.shuffle(shuffled)
-    matches = []
-    for i in range(0, len(shuffled), 2):
-        if i + 1 < len(shuffled):
-            matches.append({'p1': shuffled[i], 'p2': shuffled[i+1]})
     
     guild = client.get_guild(int(os.getenv('GUILD_ID')))
     category_id = int(os.getenv('TICKET_CATEGORY_ID'))
