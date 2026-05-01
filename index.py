@@ -340,18 +340,24 @@ async def start_tournament(tournament_id):
         if i + 1 < len(shuffled):
             matches.append({'p1': shuffled[i], 'p2': shuffled[i+1]})
     guild = client.get_guild(int(os.getenv('GUILD_ID')))
-    category = await guild.fetch_channel(int(os.getenv('TICKET_CATEGORY_ID')))
+    category_id = int(os.getenv('TICKET_CATEGORY_ID'))
+    category = await guild.fetch_channel(category_id)
+    if not category or not isinstance(category, discord.CategoryChannel):
+        print(f"Invalid ticket category: {category_id}")
+        return
+    
     for match in matches:
         channel_name = f"t-r1-{match['p1']['minecraft_name']}-{match['p2']['minecraft_name']}"
         overwrites = {
-            guild.default_role: discord.PermissionOverwrite(view_channel=False)
+            guild.default_role: discord.PermissionOverwrite(view_channel=False, send_messages=False),
+            guild.me: discord.PermissionOverwrite(view_channel=True, send_messages=True, manage_channels=True, manage_permissions=True)
         }
         p1_member = guild.get_member(match['p1']['discord_id'])
         p2_member = guild.get_member(match['p2']['discord_id'])
         if p1_member:
-            overwrites[p1_member] = discord.PermissionOverwrite(view_channel=True)
+            overwrites[p1_member] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True)
         if p2_member:
-            overwrites[p2_member] = discord.PermissionOverwrite(view_channel=True)
+            overwrites[p2_member] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True)
         channel = await guild.create_text_channel(channel_name, category=category, overwrites=overwrites)
         embed = discord.Embed(title="Tournament 1. kör", description=f"{match['p1']['minecraft_name']} vs {match['p2']['minecraft_name']}\nSok sikert!", color=0x0000FF)
         close_button = discord.ui.Button(label="Close ticket", style=discord.ButtonStyle.danger, custom_id=f"close_ticket_{tournament_id}_{match['p1']['minecraft_name']}_{match['p2']['minecraft_name']}")
@@ -387,19 +393,26 @@ async def start_round(tournament_id, round_num):
     for i in range(0, len(shuffled), 2):
         if i + 1 < len(shuffled):
             matches.append({'p1': shuffled[i], 'p2': shuffled[i+1]})
+    
     guild = client.get_guild(int(os.getenv('GUILD_ID')))
-    category = await guild.fetch_channel(int(os.getenv('TICKET_CATEGORY_ID')))
+    category_id = int(os.getenv('TICKET_CATEGORY_ID'))
+    category = await guild.fetch_channel(category_id)
+    if not category or not isinstance(category, discord.CategoryChannel):
+        print(f"Invalid ticket category: {category_id}")
+        return
+    
     for match in matches:
         channel_name = f"t-r{round_num}-{match['p1']['minecraft_name']}-{match['p2']['minecraft_name']}"
         overwrites = {
-            guild.default_role: discord.PermissionOverwrite(view_channel=False)
+            guild.default_role: discord.PermissionOverwrite(view_channel=False, send_messages=False),
+            guild.me: discord.PermissionOverwrite(view_channel=True, send_messages=True, manage_channels=True, manage_permissions=True)
         }
         p1_member = guild.get_member(match['p1']['discord_id'])
         p2_member = guild.get_member(match['p2']['discord_id'])
         if p1_member:
-            overwrites[p1_member] = discord.PermissionOverwrite(view_channel=True)
+            overwrites[p1_member] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True)
         if p2_member:
-            overwrites[p2_member] = discord.PermissionOverwrite(view_channel=True)
+            overwrites[p2_member] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True)
         channel = await guild.create_text_channel(channel_name, category=category, overwrites=overwrites)
         embed = discord.Embed(title=f"Tournament {round_num}. kör", description=f"{match['p1']['minecraft_name']} vs {match['p2']['minecraft_name']}\nSok sikert!", color=0x0000FF)
         close_button = discord.ui.Button(label="Close ticket", style=discord.ButtonStyle.danger, custom_id=f"close_ticket_{tournament_id}_{match['p1']['minecraft_name']}_{match['p2']['minecraft_name']}")
