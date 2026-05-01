@@ -346,6 +346,42 @@ async def start_tournament(tournament_id):
         print(f"Invalid ticket category: {category_id}")
         return
     
+    for match in matches:
+        channel_name = f"t-r1-{match['p1']['minecraft_name']}-{match['p2']['minecraft_name']}"
+        overwrites = {
+            guild.default_role: discord.PermissionOverwrite(view_channel=False, send_messages=False)
+        }
+        bot_member = guild.get_member(client.user.id)
+        if bot_member:
+            overwrites[bot_member] = discord.PermissionOverwrite(
+                view_channel=True,
+                send_messages=True,
+                manage_channels=True,
+                manage_permissions=True,
+                read_message_history=True
+            )
+        p1_member = guild.get_member(match['p1']['discord_id'])
+        p2_member = guild.get_member(match['p2']['discord_id'])
+        if p1_member:
+            overwrites[p1_member] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True)
+        if p2_member:
+            overwrites[p2_member] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True)
+        try:
+            channel = await guild.create_text_channel(channel_name, category=category, overwrites=overwrites)
+        except discord.Forbidden:
+            print("Bot lacks permission to create channels in ticket category")
+            return
+        except discord.Forbidden:
+            print("Bot lacks permission to create channels in ticket category")
+            return
+        embed = discord.Embed(title=f"Tournament {round_num}. kör", description=f"{match['p1']['minecraft_name']} vs {match['p2']['minecraft_name']}\nSok sikert!", color=0x0000FF)
+        close_button = discord.ui.Button(label="Close ticket", style=discord.ButtonStyle.danger, custom_id=f"close_ticket_{tournament_id}_{match['p1']['minecraft_name']}_{match['p2']['minecraft_name']}")
+        result_button = discord.ui.Button(label="eredmény beírása", style=discord.ButtonStyle.primary, custom_id=f"result_{tournament_id}_{match['p1']['minecraft_name']}_{match['p2']['minecraft_name']}")
+        view = discord.ui.View()
+        view.add_item(close_button)
+        view.add_item(result_button)
+        await channel.send(embed=embed, view=view)
+    
     bot_member = guild.me
     for match in matches:
         channel_name = f"t-r1-{match['p1']['minecraft_name']}-{match['p2']['minecraft_name']}"
@@ -412,19 +448,18 @@ async def start_round(tournament_id, round_num):
         await interaction.followup.send(f"Invalid ticket category ID: {category_id}", ephemeral=True)
         return
     
-    bot_member = guild.me
-    for match in matches:
-        channel_name = f"t-r{round_number}-{match['p1']['minecraft_name']}-{match['p2']['minecraft_name']}"
+        bot_member = guild.get_member(client.user.id)
         overwrites = {
-            guild.default_role: discord.PermissionOverwrite(view_channel=False, send_messages=False),
-            bot_member: discord.PermissionOverwrite(
+            guild.default_role: discord.PermissionOverwrite(view_channel=False, send_messages=False)
+        }
+        if bot_member:
+            overwrites[bot_member] = discord.PermissionOverwrite(
                 view_channel=True,
                 send_messages=True,
                 manage_channels=True,
                 manage_permissions=True,
                 read_message_history=True
             )
-        }
         p1_member = guild.get_member(match['p1']['discord_id'])
         p2_member = guild.get_member(match['p2']['discord_id'])
         if p1_member:
@@ -436,6 +471,7 @@ async def start_round(tournament_id, round_num):
         except discord.Forbidden:
             await interaction.followup.send("Bot lacks permission to create channels in this category. Check bot role and category permissions.", ephemeral=True)
             return
+        channel = await guild.create_text_channel(channel_name, category=category, overwrites=overwrites)
         embed = discord.Embed(title=f"Tournament {round_num}. kör", description=f"{match['p1']['minecraft_name']} vs {match['p2']['minecraft_name']}\nSok sikert!", color=0x0000FF)
         close_button = discord.ui.Button(label="Close ticket", style=discord.ButtonStyle.danger, custom_id=f"close_ticket_{tournament_id}_{match['p1']['minecraft_name']}_{match['p2']['minecraft_name']}")
         result_button = discord.ui.Button(label="eredmény beírása", style=discord.ButtonStyle.primary, custom_id=f"result_{tournament_id}_{match['p1']['minecraft_name']}_{match['p2']['minecraft_name']}")
