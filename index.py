@@ -34,13 +34,25 @@ async def on_ready():
         print(f'GUILD_ID from env: {guild_id_env}')
         sys.stdout.flush()
         
-        guild_id = int(guild_id_env)
-        guild = client.get_guild(guild_id)
-        if not guild:
-            print(f'ERROR: Bot is NOT in the configured guild {guild_id}. Commands will not sync.')
-            print(f'Available guilds: {guilds}')
+        try:
+            guild_id = int(guild_id_env)
+        except (TypeError, ValueError):
+            print(f'ERROR: Invalid GUILD_ID: {guild_id_env}')
             sys.stdout.flush()
             return
+        
+        guild = client.get_guild(guild_id)
+        if not guild:
+            print(f'WARNING: Bot is NOT in configured guild {guild_id}. Available guilds: {guilds}')
+            if client.guilds:
+                guild = client.guilds[0]
+                guild_id = guild.id
+                print(f'Falling back to first available guild: {guild.name} (ID: {guild_id})')
+            else:
+                print('ERROR: Bot is not in any guilds. Cannot sync commands.')
+                sys.stdout.flush()
+                return
+        sys.stdout.flush()
         
         print(f'Syncing commands to guild: {guild.name} (ID: {guild_id})')
         sys.stdout.flush()
