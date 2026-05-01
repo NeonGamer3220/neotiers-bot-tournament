@@ -368,10 +368,10 @@ async def start_tournament(tournament_id):
                 try:
                     msg = await ch.fetch_message(queue_message_id)
                     embed = discord.Embed(
-                        title=f"{tournament_response.data[0]['name']} Tournament - 1. kör",
-                        description=f"Játékosok: {len(players)}",
+                        title=f"{tournament_response.data[0]['name']} Tournament - {round_num}. kör",
                         color=0x00FF00
                     )
+                    embed.add_field(name="Játékosok:", value=str(len(players)))
                     matches_text = ""
                     shuffled = players[:]
                     import random
@@ -476,13 +476,13 @@ async def start_round(tournament_id, round_num):
                     msg = await ch.fetch_message(queue_message_id)
                     embed = discord.Embed(
                         title=f"{tournament_response.data[0]['name']} Tournament - {round_num}. kör",
-                        description=f"Játékosok: {len(players)}",
                         color=0x00FF00
                     )
+                    embed.add_field(name="Játékosok:", value=str(len(players)))
+                    matches_text = ""
                     shuffled = players[:]
                     import random
                     random.shuffle(shuffled)
-                    matches_text = ""
                     for i in range(0, len(shuffled), 2):
                         if i + 1 < len(shuffled):
                             p1 = shuffled[i]
