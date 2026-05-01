@@ -23,9 +23,15 @@ print(f"Supabase initialized with {'service_role' if os.getenv('SUPABASE_SERVICE
 
 @client.event
 async def on_ready():
-    guild_id = int(os.getenv('GUILD_ID'))
-    await tree.sync(guild=discord.Object(id=guild_id))
-    print(f'Logged in as {client.user}')
+    try:
+        guild_id = int(os.getenv('GUILD_ID'))
+        await tree.sync(guild=discord.Object(id=guild_id))
+        print(f'Logged in as {client.user}')
+        # Verify registered commands
+        commands = await tree.fetch_commands(guild=discord.Object(id=guild_id))
+        print(f"Registered commands: {[cmd.name for cmd in commands]}")
+    except Exception as e:
+        print(f"Error syncing commands: {e}")
 
 @tree.command(name="tournamentqueue", description="Create a tournament queue")
 @app_commands.describe(name="Tournament name", timestamp="End timestamp")
