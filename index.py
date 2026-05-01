@@ -56,6 +56,18 @@ async def on_ready():
         
         print(f'Syncing commands to guild: {guild.name} (ID: {guild_id})')
         sys.stdout.flush()
+        
+        # First, clear existing commands for this guild
+        try:
+            existing = await tree.fetch_commands(guild=discord.Object(id=guild_id))
+            print(f"Clearing {len(existing)} existing commands...")
+            for cmd in existing:
+                await tree.delete_command(cmd.name, guild=discord.Object(id=guild_id))
+            print("Existing commands cleared")
+        except Exception as e:
+            print(f"Could not clear existing commands: {e}")
+        
+        # Now sync
         await tree.sync(guild=discord.Object(id=guild_id))
         print(f'Command sync complete')
         sys.stdout.flush()
