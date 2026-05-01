@@ -11,6 +11,7 @@ import time
 
 intents = discord.Intents.default()
 intents.guilds = True
+intents.members = True  # Needed to look up members for channel permissions
 client = discord.Client(intents=intents)
 tree = app_commands.CommandTree(client)
 
@@ -194,6 +195,7 @@ async def tournamentround(interaction: discord.Interaction, action: str, tournam
                 overwrites = {
                     guild.default_role: discord.PermissionOverwrite(view_channel=False, send_messages=False)
                 }
+                # Bot always gets full access
                 bot_member = guild.get_member(client.user.id)
                 if bot_member:
                     overwrites[bot_member] = discord.PermissionOverwrite(
@@ -203,12 +205,24 @@ async def tournamentround(interaction: discord.Interaction, action: str, tournam
                         manage_permissions=True,
                         read_message_history=True
                     )
-                p1_member = guild.get_member(match['p1']['discord_id'])
-                p2_member = guild.get_member(match['p2']['discord_id'])
-                if p1_member:
-                    overwrites[p1_member] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True)
-                if p2_member:
-                    overwrites[p2_member] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True)
+                else:
+                    # Fallback to using Object ID if member not cached
+                    overwrites[discord.Object(id=client.user.id)] = discord.PermissionOverwrite(
+                        view_channel=True,
+                        send_messages=True,
+                        manage_channels=True,
+                        manage_permissions=True,
+                        read_message_history=True
+                    )
+                
+                # Add players using Object IDs (works without member cache)
+                overwrites[discord.Object(id=match['p1']['discord_id'])] = discord.PermissionOverwrite(
+                    view_channel=True, send_messages=True, read_message_history=True
+                )
+                overwrites[discord.Object(id=match['p2']['discord_id'])] = discord.PermissionOverwrite(
+                    view_channel=True, send_messages=True, read_message_history=True
+                )
+                
                 try:
                     channel = await guild.create_text_channel(channel_name, category=category, overwrites=overwrites)
                 except discord.Forbidden:
@@ -248,24 +262,10 @@ async def tournamentround(interaction: discord.Interaction, action: str, tournam
                 return
             
             deleted_channels = 0
-            guild = client.get_guild(int(os.getenv('GUILD_ID')))
-            tournament_response = supabase.table('tournaments').select('players').eq('id', tournament_uuid).execute()
-            players = tournament_response.data[0]['players'] if tournament_response.data else []
-            
             for match in matches_response.data:
                 if match['ticket_channel_id']:
                     channel = await client.fetch_channel(match['ticket_channel_id'])
                     if channel:
-                        # Remove both players from channel before deletion
-                        for player in players:
-                            if player['minecraft_name'] in [match['player1'], match['player2']]:
-                                member = guild.get_member(player['discord_id'])
-                                if member:
-                                    try:
-                                        await channel.remove_recipient(member)
-                                    except Exception as e:
-                                        print(f"Could not remove {member}: {e}")
-                        
                         try:
                             await channel.delete()
                             deleted_channels += 1
@@ -527,29 +527,14 @@ async def on_interaction(interaction: discord.Interaction):
             except Exception:
                 pass
             
-            # Get match and channel
+            # Get match and delete channel
             match_response = supabase.table('matches').select('ticket_channel_id').eq('tournament_id', tournament_id).eq('player1', p1).eq('player2', p2).execute()
             if match_response.data:
                 channel_id = match_response.data[0]['ticket_channel_id']
                 channel = await client.fetch_channel(channel_id)
                 if channel:
-                    # Kick both players from channel before deletion
-                    guild = client.get_guild(int(os.getenv('GUILD_ID')))
-                    tournament_response = supabase.table('tournaments').select('players').eq('id', tournament_id).execute()
-                    if tournament_response.data:
-                        players = tournament_response.data[0]['players']
-                        for player in players:
-                            if player['minecraft_name'] in [p1, p2]:
-                                member = guild.get_member(player['discord_id'])
-                                if member:
-                                    try:
-                                        await channel.remove_recipient(member)
-                                    except Exception as e:
-                                        print(f"Could not remove {member} from channel: {e}")
-                    
                     try:
                         await channel.delete()
-                        print(f"Deleted ticket channel {channel_id}")
                     except discord.Forbidden:
                         print("Bot lacks Manage Channels permission to delete ticket")
                     except Exception as e:
@@ -620,22 +605,6 @@ class ScoreModal(discord.ui.Modal, title="Enter Score"):
             channel_id = match_response.data[0]['ticket_channel_id']
             channel = await client.fetch_channel(channel_id)
             if channel:
-                # Kick both players from channel
-                guild = client.get_guild(int(os.getenv('GUILD_ID')))
-                tournament_response = supabase.table('tournaments').select('players').eq('id', self.tournament_id).execute()
-                if tournament_response.data:
-                    players = tournament_response.data[0]['players']
-                    for player in players:
-                        if player['minecraft_name'] in [self.p1, self.p2]:
-                            member = guild.get_member(player['discord_id'])
-                            if member:
-                                try:
-                                    await channel.remove_recipient(member)
-                                    print(f"Removed {member} from ticket channel")
-                                except Exception as e:
-                                    print(f"Could not remove {member}: {e}")
-                
-                # Delete channel
                 try:
                     await channel.delete()
                     print(f"Deleted ticket channel {channel_id}")
@@ -717,21 +686,21 @@ async def start_tournament(tournament_id):
             overwrites = {
                 guild.default_role: discord.PermissionOverwrite(view_channel=False, send_messages=False)
             }
-            bot_member = guild.get_member(client.user.id)
-            if bot_member:
-                overwrites[bot_member] = discord.PermissionOverwrite(
-                    view_channel=True,
-                    send_messages=True,
-                    manage_channels=True,
-                    manage_permissions=True,
-                    read_message_history=True
-                )
-            p1_member = guild.get_member(match['p1']['discord_id'])
-            p2_member = guild.get_member(match['p2']['discord_id'])
-            if p1_member:
-                overwrites[p1_member] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True)
-            if p2_member:
-                overwrites[p2_member] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True)
+            # Bot access using Object ID
+            overwrites[discord.Object(id=client.user.id)] = discord.PermissionOverwrite(
+                view_channel=True,
+                send_messages=True,
+                manage_channels=True,
+                manage_permissions=True,
+                read_message_history=True
+            )
+            # Player access using Object IDs (works without member cache)
+            overwrites[discord.Object(id=match['p1']['discord_id'])] = discord.PermissionOverwrite(
+                view_channel=True, send_messages=True, read_message_history=True
+            )
+            overwrites[discord.Object(id=match['p2']['discord_id'])] = discord.PermissionOverwrite(
+                view_channel=True, send_messages=True, read_message_history=True
+            )
             
             try:
                 channel = await guild.create_text_channel(channel_name, category=category, overwrites=overwrites)
@@ -836,21 +805,21 @@ async def start_round(tournament_id, round_num):
             overwrites = {
                 guild.default_role: discord.PermissionOverwrite(view_channel=False, send_messages=False)
             }
-            bot_member = guild.get_member(client.user.id)
-            if bot_member:
-                overwrites[bot_member] = discord.PermissionOverwrite(
-                    view_channel=True,
-                    send_messages=True,
-                    manage_channels=True,
-                    manage_permissions=True,
-                    read_message_history=True
-                )
-            p1_member = guild.get_member(match['p1']['discord_id'])
-            p2_member = guild.get_member(match['p2']['discord_id'])
-            if p1_member:
-                overwrites[p1_member] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True)
-            if p2_member:
-                overwrites[p2_member] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True)
+            # Bot access using Object ID
+            overwrites[discord.Object(id=client.user.id)] = discord.PermissionOverwrite(
+                view_channel=True,
+                send_messages=True,
+                manage_channels=True,
+                manage_permissions=True,
+                read_message_history=True
+            )
+            # Player access using Object IDs (works without member cache)
+            overwrites[discord.Object(id=match['p1']['discord_id'])] = discord.PermissionOverwrite(
+                view_channel=True, send_messages=True, read_message_history=True
+            )
+            overwrites[discord.Object(id=match['p2']['discord_id'])] = discord.PermissionOverwrite(
+                view_channel=True, send_messages=True, read_message_history=True
+            )
             
             try:
                 channel = await guild.create_text_channel(channel_name, category=category, overwrites=overwrites)
