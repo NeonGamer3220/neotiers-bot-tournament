@@ -66,10 +66,103 @@ async def tournamentqueue(interaction: discord.Interaction, name: str, timestamp
     delay = end_time * 1000 - time.time() * 1000
     if delay > 0:
         await asyncio.sleep(delay / 1000)
-        await start_tournament(tournament_id)
+    # Start tournament regardless (if delay <= 0, start immediately)
+    await start_tournament(tournament_id)
 
-@client.event
-async def on_interaction(interaction: discord.Interaction):
+@tree.command(name="tournamentround", description="Start or stop a tournament round manually")
+@app_commands.describe(
+    action="start or stop",
+    tournament_id="Tournament database ID",
+    round_number="Round number to start/stop"
+)
+async def tournamentround(interaction: discord.Interaction, action: str, tournament_id: str, round_number: int):
+    await interaction.response.defer(ephemeral=True)
+    
+    try:
+        tournament_uuid = tournament_id
+        tournament_response = supabase.table('tournaments').select('*').eq('id', tournament_uuid).execute()
+        if not tournament_response.data:
+            await interaction.followup.send("Tournament not found.", ephemeral=True)
+            return
+        tournament = tournament_response.data[0]
+        
+        if action.lower() == 'start':
+            if tournament['status'] not in ['open', 'active']:
+                await interaction.followup.send("Tournament must be open or active to start a round.", ephemeral=True)
+                return
+            
+            players = tournament['players']
+            if len(players) < 2:
+                await interaction.followup.send("Not enough players to start a round (minimum 2 required).", ephemeral=True)
+                return
+            
+            shuffled = players[:]
+            import random
+            random.shuffle(shuffled)
+            matches = []
+            for i in range(0, len(shuffled), 2):
+                if i + 1 < len(shuffled):
+                    matches.append({'p1': shuffled[i], 'p2': shuffled[i+1]})
+            
+            guild = client.get_guild(int(os.getenv('GUILD_ID')))
+            category = await guild.fetch_channel(int(os.getenv('TICKET_CATEGORY_ID')))
+            
+            for match in matches:
+                channel_name = f"t-r{round_number}-{match['p1']['minecraft_name']}-{match['p2']['minecraft_name']}"
+                overwrites = {
+                    guild.default_role: discord.PermissionOverwrite(view_channel=False)
+                }
+                p1_member = guild.get_member(match['p1']['discord_id'])
+                p2_member = guild.get_member(match['p2']['discord_id'])
+                if p1_member:
+                    overwrites[p1_member] = discord.PermissionOverwrite(view_channel=True)
+                if p2_member:
+                    overwrites[p2_member] = discord.PermissionOverwrite(view_channel=True)
+                channel = await guild.create_text_channel(channel_name, category=category, overwrites=overwrites)
+                embed = discord.Embed(title=f"Tournament {round_number}. kör", description=f"{match['p1']['minecraft_name']} vs {match['p2']['minecraft_name']}\nSok sikert!", color=0x0000FF)
+                close_button = discord.ui.Button(label="Close ticket", style=discord.ButtonStyle.danger, custom_id=f"close_ticket_{tournament_uuid}_{match['p1']['minecraft_name']}_{match['p2']['minecraft_name']}")
+                result_button = discord.ui.Button(label="eredmény beírása", style=discord.ButtonStyle.primary, custom_id=f"result_{tournament_uuid}_{match['p1']['minecraft_name']}_{match['p2']['minecraft_name']}")
+                view = discord.ui.View()
+                view.add_item(close_button)
+                view.add_item(result_button)
+                await channel.send(embed=embed, view=view)
+                try:
+                    supabase.table('matches').insert({
+                        'tournament_id': tournament_uuid,
+                        'round': round_number,
+                        'player1': match['p1']['minecraft_name'],
+                        'player2': match['p2']['minecraft_name'],
+                        'ticket_channel_id': channel.id
+                    }).execute()
+                except APIError as e:
+                    print(f"Failed to insert match: {e}")
+            
+            supabase.table('tournaments').update({'current_round': round_number, 'status': 'active'}).eq('id', tournament_uuid).execute()
+            await interaction.followup.send(f"Round {round_number} started with {len(matches)} matches.", ephemeral=True)
+            
+        elif action.lower() == 'stop':
+            matches_response = supabase.table('matches').select('*').eq('tournament_id', tournament_uuid).eq('round', round_number).execute()
+            if not matches_response.data:
+                await interaction.followup.send("No matches found for this round.", ephemeral=True)
+                return
+            
+            deleted_channels = 0
+            for match in matches_response.data:
+                if match['ticket_channel_id']:
+                    channel = await client.fetch_channel(match['ticket_channel_id'])
+                    if channel:
+                        await channel.delete()
+                        deleted_channels += 1
+            
+            supabase.table('matches').delete().eq('tournament_id', tournament_uuid).eq('round', round_number).execute()
+            await interaction.followup.send(f"Round {round_number} stopped. Deleted {deleted_channels} ticket channels.", ephemeral=True)
+            
+        else:
+            await interaction.followup.send("Invalid action. Use 'start' or 'stop'.", ephemeral=True)
+            
+    except APIError as e:
+        print(f"Error in tournamentround: {e}")
+        await interaction.followup.send(f"An error occurred: {e}", ephemeral=True)
     if interaction.type != discord.InteractionType.component:
         return
     custom_id = interaction.data['custom_id']
@@ -77,19 +170,23 @@ async def on_interaction(interaction: discord.Interaction):
     try:
         if custom_id.startswith('join_tournament_'):
             tournament_id = custom_id.split('_')[2]
+            try:
+                await interaction.response.defer(ephemeral=True)
+            except Exception:
+                pass
             linked_response = supabase.table('linked_accounts').select('minecraft_name').eq('discord_id', interaction.user.id).execute()
             if not linked_response.data:
-                await interaction.response.send_message("You must link your Minecraft account first.", ephemeral=True)
+                await interaction.followup.send("You must link your Minecraft account first.", ephemeral=True)
                 return
             minecraft_name = linked_response.data[0]['minecraft_name']
             tournament_response = supabase.table('tournaments').select('*').eq('id', tournament_id).execute()
             if not tournament_response.data or tournament_response.data[0]['status'] != 'open':
-                await interaction.response.send_message("Tournament not open.", ephemeral=True)
+                await interaction.followup.send("Tournament not open.", ephemeral=True)
                 return
             tournament = tournament_response.data[0]
             players = tournament['players']
             if any(p['discord_id'] == interaction.user.id for p in players):
-                await interaction.response.send_message("You already joined.", ephemeral=True)
+                await interaction.followup.send("You already joined.", ephemeral=True)
                 return
             new_players = players + [{'discord_id': interaction.user.id, 'minecraft_name': minecraft_name}]
             supabase.table('tournaments').update({'players': new_players}).eq('id', tournament_id).execute()
@@ -100,13 +197,17 @@ async def on_interaction(interaction: discord.Interaction):
             new_embed = discord.Embed.from_dict(embed.to_dict())
             new_embed.set_field_at(0, name="Játékosok:", value=players_list)
             await message.edit(embed=new_embed)
-            await interaction.response.send_message("Joined the tournament!", ephemeral=True)
+            await interaction.followup.send("Joined the tournament!", ephemeral=True)
 
         elif custom_id.startswith('leave_tournament_'):
             tournament_id = custom_id.split('_')[2]
+            try:
+                await interaction.response.defer(ephemeral=True)
+            except Exception:
+                pass
             tournament_response = supabase.table('tournaments').select('*').eq('id', tournament_id).execute()
             if not tournament_response.data or tournament_response.data[0]['status'] != 'open':
-                await interaction.response.send_message("Tournament not open.", ephemeral=True)
+                await interaction.followup.send("Tournament not open.", ephemeral=True)
                 return
             tournament = tournament_response.data[0]
             players = tournament['players']
@@ -119,31 +220,40 @@ async def on_interaction(interaction: discord.Interaction):
             new_embed = discord.Embed.from_dict(embed.to_dict())
             new_embed.set_field_at(0, name="Játékosok:", value=players_list)
             await message.edit(embed=new_embed)
-            await interaction.response.send_message("Left the tournament!", ephemeral=True)
+            await interaction.followup.send("Left the tournament!", ephemeral=True)
 
         elif custom_id.startswith('close_ticket_'):
             parts = custom_id.split('_')
             tournament_id = parts[2]
             p1 = parts[3]
             p2 = parts[4]
+            try:
+                await interaction.response.defer(ephemeral=True)
+            except Exception:
+                pass
             match_response = supabase.table('matches').select('ticket_channel_id').eq('tournament_id', tournament_id).eq('player1', p1).eq('player2', p2).execute()
             if match_response.data:
                 channel = await client.fetch_channel(match_response.data[0]['ticket_channel_id'])
-                await channel.delete()
-            await interaction.response.send_message("Ticket closed.", ephemeral=True)
+                if channel:
+                    await channel.delete()
+            await interaction.followup.send("Ticket closed.", ephemeral=True)
 
         elif custom_id.startswith('result_'):
             parts = custom_id.split('_')
             tournament_id = parts[1]
             p1 = parts[2]
             p2 = parts[3]
+            try:
+                await interaction.response.defer(ephemeral=True)
+            except Exception:
+                pass
             select = discord.ui.Select(placeholder="Select winner", options=[
                 discord.SelectOption(label=f"{p1} won", value=f"{p1}_win"),
                 discord.SelectOption(label=f"{p2} won", value=f"{p2}_win")
             ], custom_id=f"select_winner_{tournament_id}_{p1}_{p2}")
             view = discord.ui.View()
             view.add_item(select)
-            await interaction.response.send_message("Select the winner:", view=view, ephemeral=True)
+            await interaction.followup.send("Select the winner:", view=view, ephemeral=True)
 
         elif custom_id.startswith('select_winner_'):
             parts = custom_id.split('_')
@@ -170,9 +280,13 @@ async def on_interaction(interaction: discord.Interaction):
             match_response = supabase.table('matches').select('ticket_channel_id').eq('tournament_id', tournament_id).eq('player1', p1).eq('player2', p2).execute()
             if match_response.data:
                 channel = await client.fetch_channel(match_response.data[0]['ticket_channel_id'])
-                await channel.delete()
+                if channel:
+                    await channel.delete()
             await check_round_complete(tournament_id)
-            await interaction.response.send_message("Result submitted.", ephemeral=True)
+            try:
+                await interaction.response.send_message("Result submitted.", ephemeral=True)
+            except Exception:
+                await interaction.followup.send("Result submitted.", ephemeral=True)
 
     except APIError as e:
         print(f"Supabase interaction error: {e}")
@@ -199,9 +313,13 @@ class ScoreModal(discord.ui.Modal, title="Enter Score"):
         match_response = supabase.table('matches').select('ticket_channel_id').eq('tournament_id', self.tournament_id).eq('player1', self.p1).eq('player2', self.p2).execute()
         if match_response.data:
             channel = await client.fetch_channel(match_response.data[0]['ticket_channel_id'])
-            await channel.delete()
+            if channel:
+                await channel.delete()
         await check_round_complete(self.tournament_id)
-        await interaction.response.send_message("Result submitted.", ephemeral=True)
+        try:
+            await interaction.response.send_message("Result submitted.", ephemeral=True)
+        except Exception:
+            await interaction.followup.send("Result submitted.", ephemeral=True)
 
 async def start_tournament(tournament_id):
     try:
@@ -225,10 +343,14 @@ async def start_tournament(tournament_id):
     for match in matches:
         channel_name = f"t-r1-{match['p1']['minecraft_name']}-{match['p2']['minecraft_name']}"
         overwrites = {
-            guild.default_role: discord.PermissionOverwrite(view_channel=False),
-            guild.get_member(match['p1']['discord_id']): discord.PermissionOverwrite(view_channel=True),
-            guild.get_member(match['p2']['discord_id']): discord.PermissionOverwrite(view_channel=True)
+            guild.default_role: discord.PermissionOverwrite(view_channel=False)
         }
+        p1_member = guild.get_member(match['p1']['discord_id'])
+        p2_member = guild.get_member(match['p2']['discord_id'])
+        if p1_member:
+            overwrites[p1_member] = discord.PermissionOverwrite(view_channel=True)
+        if p2_member:
+            overwrites[p2_member] = discord.PermissionOverwrite(view_channel=True)
         channel = await guild.create_text_channel(channel_name, category=category, overwrites=overwrites)
         embed = discord.Embed(title="Tournament 1. kör", description=f"{match['p1']['minecraft_name']} vs {match['p2']['minecraft_name']}\nSok sikert!", color=0x0000FF)
         close_button = discord.ui.Button(label="Close ticket", style=discord.ButtonStyle.danger, custom_id=f"close_ticket_{tournament_id}_{match['p1']['minecraft_name']}_{match['p2']['minecraft_name']}")
@@ -269,10 +391,14 @@ async def start_round(tournament_id, round_num):
     for match in matches:
         channel_name = f"t-r{round_num}-{match['p1']['minecraft_name']}-{match['p2']['minecraft_name']}"
         overwrites = {
-            guild.default_role: discord.PermissionOverwrite(view_channel=False),
-            guild.get_member(match['p1']['discord_id']): discord.PermissionOverwrite(view_channel=True),
-            guild.get_member(match['p2']['discord_id']): discord.PermissionOverwrite(view_channel=True)
+            guild.default_role: discord.PermissionOverwrite(view_channel=False)
         }
+        p1_member = guild.get_member(match['p1']['discord_id'])
+        p2_member = guild.get_member(match['p2']['discord_id'])
+        if p1_member:
+            overwrites[p1_member] = discord.PermissionOverwrite(view_channel=True)
+        if p2_member:
+            overwrites[p2_member] = discord.PermissionOverwrite(view_channel=True)
         channel = await guild.create_text_channel(channel_name, category=category, overwrites=overwrites)
         embed = discord.Embed(title=f"Tournament {round_num}. kör", description=f"{match['p1']['minecraft_name']} vs {match['p2']['minecraft_name']}\nSok sikert!", color=0x0000FF)
         close_button = discord.ui.Button(label="Close ticket", style=discord.ButtonStyle.danger, custom_id=f"close_ticket_{tournament_id}_{match['p1']['minecraft_name']}_{match['p2']['minecraft_name']}")
