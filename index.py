@@ -204,9 +204,6 @@ async def tournamentround(interaction: discord.Interaction, action: str, tournam
             
             supabase.table('tournaments').update({'current_round': round_number, 'status': 'active'}).eq('id', tournament_uuid).execute()
             await interaction.followup.send(f"Round {round_number} started with {len(matches)} matches.", ephemeral=True)
-        except Exception as e:
-            print(f"Error in tournamentround start: {e}")
-            await interaction.followup.send(f"Error: {e}", ephemeral=True)
             
         elif action.lower() == 'stop':
             matches_response = supabase.table('matches').select('*').eq('tournament_id', tournament_uuid).eq('round', round_number).execute()
@@ -231,6 +228,9 @@ async def tournamentround(interaction: discord.Interaction, action: str, tournam
     except APIError as e:
         print(f"Error in tournamentround: {e}")
         await interaction.followup.send(f"Database error: {e}", ephemeral=True)
+    except Exception as e:
+        print(f"Unexpected error in tournamentround: {e}")
+        await interaction.followup.send(f"Error: {e}", ephemeral=True)
     except Exception as e:
         print(f"Unexpected error in tournamentround: {e}")
         await interaction.followup.send(f"Error: {e}", ephemeral=True)
