@@ -106,20 +106,37 @@ async def tournamentround(interaction: discord.Interaction, action: str, tournam
                     matches.append({'p1': shuffled[i], 'p2': shuffled[i+1]})
             
             guild = client.get_guild(int(os.getenv('GUILD_ID')))
-            category = await guild.fetch_channel(int(os.getenv('TICKET_CATEGORY_ID')))
+            category_id = int(os.getenv('TICKET_CATEGORY_ID'))
+            category = guild.get_channel(category_id)
+            if not category or not isinstance(category, discord.CategoryChannel):
+                await interaction.followup.send(f"Invalid ticket category ID: {category_id}", ephemeral=True)
+                return
             
             for match in matches:
                 channel_name = f"t-r{round_number}-{match['p1']['minecraft_name']}-{match['p2']['minecraft_name']}"
                 overwrites = {
-                    guild.default_role: discord.PermissionOverwrite(view_channel=False)
+                    guild.default_role: discord.PermissionOverwrite(view_channel=False, send_messages=False)
                 }
+                bot_member = guild.get_member(client.user.id)
+                if bot_member:
+                    overwrites[bot_member] = discord.PermissionOverwrite(
+                        view_channel=True,
+                        send_messages=True,
+                        manage_channels=True,
+                        manage_permissions=True,
+                        read_message_history=True
+                    )
                 p1_member = guild.get_member(match['p1']['discord_id'])
                 p2_member = guild.get_member(match['p2']['discord_id'])
                 if p1_member:
-                    overwrites[p1_member] = discord.PermissionOverwrite(view_channel=True)
+                    overwrites[p1_member] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True)
                 if p2_member:
-                    overwrites[p2_member] = discord.PermissionOverwrite(view_channel=True)
-                channel = await guild.create_text_channel(channel_name, category=category, overwrites=overwrites)
+                    overwrites[p2_member] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True)
+                try:
+                    channel = await guild.create_text_channel(channel_name, category=category, overwrites=overwrites)
+                except discord.Forbidden:
+                    await interaction.followup.send("Bot lacks permission to create channels in this category.", ephemeral=True)
+                    return
                 embed = discord.Embed(title=f"Tournament {round_number}. kör", description=f"{match['p1']['minecraft_name']} vs {match['p2']['minecraft_name']}\nSok sikert!", color=0x0000FF)
                 close_button = discord.ui.Button(label="Close ticket", style=discord.ButtonStyle.danger, custom_id=f"close_ticket_{tournament_uuid}_{match['p1']['minecraft_name']}_{match['p2']['minecraft_name']}")
                 result_button = discord.ui.Button(label="eredmény beírása", style=discord.ButtonStyle.primary, custom_id=f"result_{tournament_uuid}_{match['p1']['minecraft_name']}_{match['p2']['minecraft_name']}")
@@ -330,8 +347,14 @@ async def start_tournament(tournament_id):
     except APIError as e:
         print(f"Error starting tournament: {e}")
         return
+    
     supabase.table('tournaments').update({'status': 'active', 'current_round': 1}).eq('id', tournament_id).execute()
     players = tournament_response.data[0]['players']
+    
+    if len(players) < 2:
+        print(f"Not enough players to start tournament {tournament_id}")
+        return
+    
     shuffled = players[:]
     import random
     random.shuffle(shuffled)
@@ -339,6 +362,7 @@ async def start_tournament(tournament_id):
     for i in range(0, len(shuffled), 2):
         if i + 1 < len(shuffled):
             matches.append({'p1': shuffled[i], 'p2': shuffled[i+1]})
+    
     guild = client.get_guild(int(os.getenv('GUILD_ID')))
     category_id = int(os.getenv('TICKET_CATEGORY_ID'))
     category = guild.get_channel(category_id)
@@ -366,46 +390,13 @@ async def start_tournament(tournament_id):
             overwrites[p1_member] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True)
         if p2_member:
             overwrites[p2_member] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True)
+        
         try:
             channel = await guild.create_text_channel(channel_name, category=category, overwrites=overwrites)
         except discord.Forbidden:
             print("Bot lacks permission to create channels in ticket category")
             return
-        except discord.Forbidden:
-            print("Bot lacks permission to create channels in ticket category")
-            return
-        embed = discord.Embed(title=f"Tournament {round_num}. kör", description=f"{match['p1']['minecraft_name']} vs {match['p2']['minecraft_name']}\nSok sikert!", color=0x0000FF)
-        close_button = discord.ui.Button(label="Close ticket", style=discord.ButtonStyle.danger, custom_id=f"close_ticket_{tournament_id}_{match['p1']['minecraft_name']}_{match['p2']['minecraft_name']}")
-        result_button = discord.ui.Button(label="eredmény beírása", style=discord.ButtonStyle.primary, custom_id=f"result_{tournament_id}_{match['p1']['minecraft_name']}_{match['p2']['minecraft_name']}")
-        view = discord.ui.View()
-        view.add_item(close_button)
-        view.add_item(result_button)
-        await channel.send(embed=embed, view=view)
-    
-    bot_member = guild.me
-    for match in matches:
-        channel_name = f"t-r1-{match['p1']['minecraft_name']}-{match['p2']['minecraft_name']}"
-        overwrites = {
-            guild.default_role: discord.PermissionOverwrite(view_channel=False, send_messages=False),
-            bot_member: discord.PermissionOverwrite(
-                view_channel=True,
-                send_messages=True,
-                manage_channels=True,
-                manage_permissions=True,
-                read_message_history=True
-            )
-        }
-        p1_member = guild.get_member(match['p1']['discord_id'])
-        p2_member = guild.get_member(match['p2']['discord_id'])
-        if p1_member:
-            overwrites[p1_member] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True)
-        if p2_member:
-            overwrites[p2_member] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True)
-        try:
-            channel = await guild.create_text_channel(channel_name, category=category, overwrites=overwrites)
-        except discord.Forbidden:
-            print("Bot lacks permission to create channels in ticket category")
-            return
+        
         embed = discord.Embed(title="Tournament 1. kör", description=f"{match['p1']['minecraft_name']} vs {match['p2']['minecraft_name']}\nSok sikert!", color=0x0000FF)
         close_button = discord.ui.Button(label="Close ticket", style=discord.ButtonStyle.danger, custom_id=f"close_ticket_{tournament_id}_{match['p1']['minecraft_name']}_{match['p2']['minecraft_name']}")
         result_button = discord.ui.Button(label="eredmény beírása", style=discord.ButtonStyle.primary, custom_id=f"result_{tournament_id}_{match['p1']['minecraft_name']}_{match['p2']['minecraft_name']}")
@@ -413,6 +404,7 @@ async def start_tournament(tournament_id):
         view.add_item(close_button)
         view.add_item(result_button)
         await channel.send(embed=embed, view=view)
+        
         try:
             supabase.table('matches').insert({
                 'tournament_id': tournament_id,
@@ -432,7 +424,13 @@ async def start_round(tournament_id, round_num):
     except APIError as e:
         print(f"Error starting round: {e}")
         return
+    
     players = tournament_response.data[0]['players']
+    
+    if len(players) < 2:
+        print(f"Not enough players to start round {round_num}")
+        return
+    
     shuffled = players[:]
     import random
     random.shuffle(shuffled)
@@ -445,13 +443,15 @@ async def start_round(tournament_id, round_num):
     category_id = int(os.getenv('TICKET_CATEGORY_ID'))
     category = guild.get_channel(category_id)
     if not category or not isinstance(category, discord.CategoryChannel):
-        await interaction.followup.send(f"Invalid ticket category ID: {category_id}", ephemeral=True)
+        print(f"Invalid ticket category: {category_id}")
         return
     
-        bot_member = guild.get_member(client.user.id)
+    for match in matches:
+        channel_name = f"t-r{round_num}-{match['p1']['minecraft_name']}-{match['p2']['minecraft_name']}"
         overwrites = {
             guild.default_role: discord.PermissionOverwrite(view_channel=False, send_messages=False)
         }
+        bot_member = guild.get_member(client.user.id)
         if bot_member:
             overwrites[bot_member] = discord.PermissionOverwrite(
                 view_channel=True,
@@ -466,12 +466,13 @@ async def start_round(tournament_id, round_num):
             overwrites[p1_member] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True)
         if p2_member:
             overwrites[p2_member] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True)
+        
         try:
             channel = await guild.create_text_channel(channel_name, category=category, overwrites=overwrites)
         except discord.Forbidden:
-            await interaction.followup.send("Bot lacks permission to create channels in this category. Check bot role and category permissions.", ephemeral=True)
+            print("Bot lacks permission to create channels in ticket category")
             return
-        channel = await guild.create_text_channel(channel_name, category=category, overwrites=overwrites)
+        
         embed = discord.Embed(title=f"Tournament {round_num}. kör", description=f"{match['p1']['minecraft_name']} vs {match['p2']['minecraft_name']}\nSok sikert!", color=0x0000FF)
         close_button = discord.ui.Button(label="Close ticket", style=discord.ButtonStyle.danger, custom_id=f"close_ticket_{tournament_id}_{match['p1']['minecraft_name']}_{match['p2']['minecraft_name']}")
         result_button = discord.ui.Button(label="eredmény beírása", style=discord.ButtonStyle.primary, custom_id=f"result_{tournament_id}_{match['p1']['minecraft_name']}_{match['p2']['minecraft_name']}")
@@ -479,6 +480,7 @@ async def start_round(tournament_id, round_num):
         view.add_item(close_button)
         view.add_item(result_button)
         await channel.send(embed=embed, view=view)
+        
         try:
             supabase.table('matches').insert({
                 'tournament_id': tournament_id,
