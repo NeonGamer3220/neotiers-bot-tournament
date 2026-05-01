@@ -312,6 +312,51 @@ async def tournamentfixpermissions(interaction: discord.Interaction, tournament_
         await interaction.followup.send(f"Error: {e}", ephemeral=True)
 
 
+@tree.command(name="sync", description="Force sync slash commands (admin only)")
+async def sync_commands(interaction: discord.Interaction):
+    # Check if user has admin role
+    admin_role_id = os.getenv('ADMIN_ROLE_ID')
+    if admin_role_id:
+        admin_role = interaction.guild.get_role(int(admin_role_id))
+        if admin_role and admin_role not in interaction.user.roles:
+            await interaction.response.send_message("You need the admin role to use this command.", ephemeral=True)
+            return
+    
+    await interaction.response.defer(ephemeral=True)
+    try:
+        guild_id = int(os.getenv('GUILD_ID'))
+        await tree.sync(guild=discord.Object(id=guild_id))
+        commands = await tree.fetch_commands(guild=discord.Object(id=guild_id))
+        await interaction.followup.send(
+            f"Commands synced to guild: {', '.join([cmd.name for cmd in commands])}",
+            ephemeral=True
+        )
+    except Exception as e:
+        await interaction.followup.send(f"Sync failed: {e}", ephemeral=True)
+
+
+@tree.command(name="syncglobal", description="Force global sync (admin only)")
+async def sync_global(interaction: discord.Interaction):
+    # Check if user has admin role
+    admin_role_id = os.getenv('ADMIN_ROLE_ID')
+    if admin_role_id:
+        admin_role = interaction.guild.get_role(int(admin_role_id))
+        if admin_role and admin_role not in interaction.user.roles:
+            await interaction.response.send_message("You need the admin role to use this command.", ephemeral=True)
+            return
+    
+    await interaction.response.defer(ephemeral=True)
+    try:
+        await tree.sync()
+        commands = await tree.fetch_commands()
+        await interaction.followup.send(
+            f"Global commands synced: {', '.join([cmd.name for cmd in commands])}",
+            ephemeral=True
+        )
+    except Exception as e:
+        await interaction.followup.send(f"Sync failed: {e}", ephemeral=True)
+
+
 @client.event
 async def on_interaction(interaction: discord.Interaction):
     if interaction.type != discord.InteractionType.component:
