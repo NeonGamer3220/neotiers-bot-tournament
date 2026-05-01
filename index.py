@@ -54,28 +54,48 @@ async def on_ready():
                 return
         sys.stdout.flush()
         
-        print(f'Syncing commands to guild: {guild.name} (ID: {guild_id})')
+        print(f'Bot user ID: {client.user.id}')
+        print(f'Tree commands before sync: {[cmd.name for cmd in tree.get_commands()]}')
         sys.stdout.flush()
+        
+        # Wait a bit for Discord to be ready
+        await asyncio.sleep(2)
+        
+        # Get or create guild object for sync
+        guild_obj = discord.Object(id=guild_id)
         
         # First, clear existing commands for this guild
         try:
-            existing = await tree.fetch_commands(guild=discord.Object(id=guild_id))
-            print(f"Clearing {len(existing)} existing commands...")
+            existing = await tree.fetch_commands(guild=guild_obj)
+            print(f"Found {len(existing)} existing commands in guild")
             for cmd in existing:
-                await tree.delete_command(cmd.name, guild=discord.Object(id=guild_id))
+                await tree.delete_command(cmd.name, guild=guild_obj)
             print("Existing commands cleared")
         except Exception as e:
             print(f"Could not clear existing commands: {e}")
         
-        # Now sync
-        await tree.sync(guild=discord.Object(id=guild_id))
-        print(f'Command sync complete')
         sys.stdout.flush()
         
-        commands = await tree.fetch_commands(guild=discord.Object(id=guild_id))
+        # Now sync
+        print(f'Syncing commands to guild: {guild.name} (ID: {guild_id})')
+        sys.stdout.flush()
+        synced = await tree.sync(guild=guild_obj)
+        print(f'Sync returned {len(synced)} commands')
+        sys.stdout.flush()
+        
+        # Fetch back to verify
+        await asyncio.sleep(1)
+        commands = await tree.fetch_commands(guild=guild_obj)
         cmd_names = [cmd.name for cmd in commands]
-        print(f"Registered commands: {cmd_names}")
+        print(f"Verified registered commands: {cmd_names}")
         print(f"Total commands: {len(cmd_names)}")
+        sys.stdout.flush()
+        
+        if len(cmd_names) == 0:
+            print('WARNING: No commands registered. Checking permissions...')
+            # Check if bot has applications.commands scope
+            print(f'Bot scope: {client.user.public_flags}')
+            print(f'Bot mentions: {client.user.mention}')
         sys.stdout.flush()
     except Exception as e:
         import traceback
