@@ -183,6 +183,129 @@ async def tournamentround(interaction: discord.Interaction, action: str, tournam
         await interaction.followup.send(f"An error occurred: {e}", ephemeral=True)
 
 
+@tree.command(name="tournamentaddticket", description="Add all tournament players to their ticket channels (debug)")
+@app_commands.describe(tournament_id="Tournament database ID")
+async def tournamentaddticket(interaction: discord.Interaction, tournament_id: str):
+    await interaction.response.defer(ephemeral=True)
+    
+    try:
+        tournament_response = supabase.table('tournaments').select('*').eq('id', tournament_id).execute()
+        if not tournament_response.data:
+            await interaction.followup.send("Tournament not found.", ephemeral=True)
+            return
+        
+        tournament = tournament_response.data[0]
+        players = tournament['players']
+        if not players:
+            await interaction.followup.send("No players in tournament.", ephemeral=True)
+            return
+        
+        guild = client.get_guild(int(os.getenv('GUILD_ID')))
+        bot_member = guild.get_member(client.user.id)
+        
+        matches_response = supabase.table('matches').select('*').eq('tournament_id', tournament_id).execute()
+        if not matches_response.data:
+            await interaction.followup.send("No matches found. Start a round first.", ephemeral=True)
+            return
+        
+        updated = 0
+        for match in matches_response.data:
+            channel_id = match['ticket_channel_id']
+            if not channel_id:
+                continue
+            
+            try:
+                channel = await client.fetch_channel(channel_id)
+                if not channel or not isinstance(channel, discord.TextChannel):
+                    continue
+                
+                p1_discord_id = None
+                p2_discord_id = None
+                for p in players:
+                    if p['minecraft_name'] == match['player1']:
+                        p1_discord_id = p['discord_id']
+                    if p['minecraft_name'] == match['player2']:
+                        p2_discord_id = p['discord_id']
+                
+                if not p1_discord_id or not p2_discord_id:
+                    continue
+                
+                overwrites = channel.overwrites.copy() if channel.overwrites else {}
+                p1_member = guild.get_member(p1_discord_id)
+                p2_member = guild.get_member(p2_discord_id)
+                
+                if p1_member:
+                    overwrites[p1_member] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True)
+                if p2_member:
+                    overwrites[p2_member] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True)
+                if bot_member:
+                    overwrites[bot_member] = discord.PermissionOverwrite(
+                        view_channel=True, send_messages=True, manage_channels=True, manage_permissions=True, read_message_history=True
+                    )
+                
+                await channel.edit(overwrites=overwrites)
+                updated += 1
+            except Exception as e:
+                print(f"Failed to update channel {channel_id}: {e}")
+                continue
+        
+        await interaction.followup.send(f"Updated {updated} ticket channels with player permissions.", ephemeral=True)
+        
+    except APIError as e:
+        print(f"Error in tournamentaddticket: {e}")
+        await interaction.followup.send(f"Database error: {e}", ephemeral=True)
+    except Exception as e:
+        print(f"Unexpected error in tournamentaddticket: {e}")
+        await interaction.followup.send(f"Error: {e}", ephemeral=True)
+
+
+@tree.command(name="tournamentfixpermissions", description="Fix bot permissions in all ticket channels")
+@app_commands.describe(tournament_id="Tournament database ID")
+async def tournamentfixpermissions(interaction: discord.Interaction, tournament_id: str):
+    await interaction.response.defer(ephemeral=True)
+    
+    try:
+        guild = client.get_guild(int(os.getenv('GUILD_ID')))
+        bot_member = guild.get_member(client.user.id)
+        
+        matches_response = supabase.table('matches').select('*').eq('tournament_id', tournament_id).execute()
+        if not matches_response.data:
+            await interaction.followup.send("No matches found.", ephemeral=True)
+            return
+        
+        updated = 0
+        for match in matches_response.data:
+            channel_id = match['ticket_channel_id']
+            if not channel_id:
+                continue
+            
+            try:
+                channel = await client.fetch_channel(channel_id)
+                if not channel or not isinstance(channel, discord.TextChannel):
+                    continue
+                
+                overwrites = channel.overwrites.copy() if channel.overwrites else {}
+                if bot_member:
+                    overwrites[bot_member] = discord.PermissionOverwrite(
+                        view_channel=True, send_messages=True, manage_channels=True, manage_permissions=True, read_message_history=True
+                    )
+                
+                await channel.edit(overwrites=overwrites)
+                updated += 1
+            except Exception as e:
+                print(f"Failed to update channel {channel_id}: {e}")
+                continue
+        
+        await interaction.followup.send(f"Fixed bot permissions in {updated} ticket channels.", ephemeral=True)
+        
+    except APIError as e:
+        print(f"Error in tournamentfixpermissions: {e}")
+        await interaction.followup.send(f"Database error: {e}", ephemeral=True)
+    except Exception as e:
+        print(f"Unexpected error in tournamentfixpermissions: {e}")
+        await interaction.followup.send(f"Error: {e}", ephemeral=True)
+
+
 @client.event
 async def on_interaction(interaction: discord.Interaction):
     if interaction.type != discord.InteractionType.component:
