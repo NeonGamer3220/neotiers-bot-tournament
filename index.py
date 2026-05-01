@@ -55,16 +55,15 @@ async def on_ready():
         sys.stdout.flush()
         
         print(f'Bot user ID: {client.user.id}')
-        print(f'Tree commands before sync: {[cmd.name for cmd in tree.get_commands()]}')
+        all_commands = tree.get_commands()
+        print(f'Tree has {len(all_commands)} commands registered: {[c.name for c in all_commands]}')
         sys.stdout.flush()
         
-        # Wait a bit for Discord to be ready
         await asyncio.sleep(2)
         
-        # Get or create guild object for sync
         guild_obj = discord.Object(id=guild_id)
         
-        # First, clear existing commands for this guild
+        # Clear existing
         try:
             existing = await tree.fetch_commands(guild=guild_obj)
             print(f"Found {len(existing)} existing commands in guild")
@@ -72,23 +71,22 @@ async def on_ready():
                 await tree.delete_command(cmd.name, guild=guild_obj)
             print("Existing commands cleared")
         except Exception as e:
-            print(f"Could not clear existing commands: {e}")
+            print(f"Could not clear: {e}")
         
-        sys.stdout.flush()
+        # Sync
+        print(f'Syncing to guild {guild_id}...')
+        try:
+            synced = await tree.sync(guild=guild_obj)
+            print(f'Sync returned: {[c.name for c in synced]} ({len(synced)} commands)')
+        except Exception as e:
+            print(f'Sync error: {e}')
+            import traceback; traceback.print_exc()
         
-        # Now sync
-        print(f'Syncing commands to guild: {guild.name} (ID: {guild_id})')
-        sys.stdout.flush()
-        synced = await tree.sync(guild=guild_obj)
-        print(f'Sync returned {len(synced)} commands')
-        sys.stdout.flush()
-        
-        # Fetch back to verify
-        await asyncio.sleep(1)
+        # Verify
+        await asyncio.sleep(2)
         commands = await tree.fetch_commands(guild=guild_obj)
-        cmd_names = [cmd.name for cmd in commands]
-        print(f"Verified registered commands: {cmd_names}")
-        print(f"Total commands: {len(cmd_names)}")
+        print(f"FINAL - Registered commands: {[c.name for c in commands]}")
+        print(f"FINAL - Total: {len(commands)}")
         sys.stdout.flush()
         
         if len(cmd_names) == 0:
@@ -243,13 +241,38 @@ async def tournamentround(interaction: discord.Interaction, action: str, tournam
                 await interaction.followup.send("No matches found for this round.", ephemeral=True)
                 return
             
+        elif action.lower() == 'stop':
+            matches_response = supabase.table('matches').select('*').eq('tournament_id', tournament_uuid).eq('round', round_number).execute()
+            if not matches_response.data:
+                await interaction.followup.send("No matches found for this round.", ephemeral=True)
+                return
+            
             deleted_channels = 0
+            guild = client.get_guild(int(os.getenv('GUILD_ID')))
+            tournament_response = supabase.table('tournaments').select('players').eq('id', tournament_uuid).execute()
+            players = tournament_response.data[0]['players'] if tournament_response.data else []
+            
             for match in matches_response.data:
                 if match['ticket_channel_id']:
                     channel = await client.fetch_channel(match['ticket_channel_id'])
                     if channel:
-                        await channel.delete()
-                        deleted_channels += 1
+                        # Remove both players from channel before deletion
+                        for player in players:
+                            if player['minecraft_name'] in [match['player1'], match['player2']]:
+                                member = guild.get_member(player['discord_id'])
+                                if member:
+                                    try:
+                                        await channel.remove_recipient(member)
+                                    except Exception as e:
+                                        print(f"Could not remove {member}: {e}")
+                        
+                        try:
+                            await channel.delete()
+                            deleted_channels += 1
+                        except discord.Forbidden:
+                            print("Bot lacks Manage Channels permission to delete ticket")
+                        except Exception as e:
+                            print(f"Error deleting channel: {e}")
             
             supabase.table('matches').delete().eq('tournament_id', tournament_uuid).eq('round', round_number).execute()
             await interaction.followup.send(f"Round {round_number} stopped. Deleted {deleted_channels} ticket channels.", ephemeral=True)
@@ -260,9 +283,6 @@ async def tournamentround(interaction: discord.Interaction, action: str, tournam
     except APIError as e:
         print(f"Error in tournamentround: {e}")
         await interaction.followup.send(f"Database error: {e}", ephemeral=True)
-    except Exception as e:
-        print(f"Unexpected error in tournamentround: {e}")
-        await interaction.followup.send(f"Error: {e}", ephemeral=True)
     except Exception as e:
         print(f"Unexpected error in tournamentround: {e}")
         await interaction.followup.send(f"Error: {e}", ephemeral=True)
@@ -506,11 +526,35 @@ async def on_interaction(interaction: discord.Interaction):
                 await interaction.response.defer(ephemeral=True)
             except Exception:
                 pass
+            
+            # Get match and channel
             match_response = supabase.table('matches').select('ticket_channel_id').eq('tournament_id', tournament_id).eq('player1', p1).eq('player2', p2).execute()
             if match_response.data:
-                channel = await client.fetch_channel(match_response.data[0]['ticket_channel_id'])
+                channel_id = match_response.data[0]['ticket_channel_id']
+                channel = await client.fetch_channel(channel_id)
                 if channel:
-                    await channel.delete()
+                    # Kick both players from channel before deletion
+                    guild = client.get_guild(int(os.getenv('GUILD_ID')))
+                    tournament_response = supabase.table('tournaments').select('players').eq('id', tournament_id).execute()
+                    if tournament_response.data:
+                        players = tournament_response.data[0]['players']
+                        for player in players:
+                            if player['minecraft_name'] in [p1, p2]:
+                                member = guild.get_member(player['discord_id'])
+                                if member:
+                                    try:
+                                        await channel.remove_recipient(member)
+                                    except Exception as e:
+                                        print(f"Could not remove {member} from channel: {e}")
+                    
+                    try:
+                        await channel.delete()
+                        print(f"Deleted ticket channel {channel_id}")
+                    except discord.Forbidden:
+                        print("Bot lacks Manage Channels permission to delete ticket")
+                    except Exception as e:
+                        print(f"Error deleting channel: {e}")
+            
             await interaction.followup.send("Ticket closed.", ephemeral=True)
 
         elif custom_id.startswith('result_'):
@@ -567,13 +611,39 @@ class ScoreModal(discord.ui.Modal, title="Enter Score"):
             supabase.table('matches').update({'winner': self.winner, 'score': score}).eq('tournament_id', self.tournament_id).eq('player1', self.p1).eq('player2', self.p2).execute()
         except APIError as e:
             print(f"Failed to update match result: {e}")
+        
         results_channel = await client.fetch_channel(int(os.getenv('RESULTS_CHANNEL_ID')))
         await results_channel.send(f"{self.p1} vs {self.p2}: {self.winner} won {score}")
+        
         match_response = supabase.table('matches').select('ticket_channel_id').eq('tournament_id', self.tournament_id).eq('player1', self.p1).eq('player2', self.p2).execute()
         if match_response.data:
-            channel = await client.fetch_channel(match_response.data[0]['ticket_channel_id'])
+            channel_id = match_response.data[0]['ticket_channel_id']
+            channel = await client.fetch_channel(channel_id)
             if channel:
-                await channel.delete()
+                # Kick both players from channel
+                guild = client.get_guild(int(os.getenv('GUILD_ID')))
+                tournament_response = supabase.table('tournaments').select('players').eq('id', self.tournament_id).execute()
+                if tournament_response.data:
+                    players = tournament_response.data[0]['players']
+                    for player in players:
+                        if player['minecraft_name'] in [self.p1, self.p2]:
+                            member = guild.get_member(player['discord_id'])
+                            if member:
+                                try:
+                                    await channel.remove_recipient(member)
+                                    print(f"Removed {member} from ticket channel")
+                                except Exception as e:
+                                    print(f"Could not remove {member}: {e}")
+                
+                # Delete channel
+                try:
+                    await channel.delete()
+                    print(f"Deleted ticket channel {channel_id}")
+                except discord.Forbidden:
+                    print("Bot lacks Manage Channels permission to delete ticket")
+                except Exception as e:
+                    print(f"Error deleting channel: {e}")
+        
         await check_round_complete(self.tournament_id)
         await interaction.followup.send("Result submitted.", ephemeral=True)
 
