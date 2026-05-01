@@ -23,7 +23,8 @@ print(f"Supabase initialized with {'service_role' if os.getenv('SUPABASE_SERVICE
 
 @client.event
 async def on_ready():
-    await tree.sync()
+    guild_id = int(os.getenv('GUILD_ID'))
+    await tree.sync(guild=discord.Object(id=guild_id))
     print(f'Logged in as {client.user}')
 
 @tree.command(name="tournamentqueue", description="Create a tournament queue")
