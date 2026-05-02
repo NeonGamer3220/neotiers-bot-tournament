@@ -38,19 +38,19 @@ async def on_ready():
         try:
             guild_id = int(guild_id_env)
         except (TypeError, ValueError):
-            print(f'ERROR: Invalid GUILD_ID: {guild_id_env}')
+            print(f'ERROR: Érvénytelen GUILD_ID: {guild_id_env}')
             sys.stdout.flush()
             return
         
         guild = client.get_guild(guild_id)
         if not guild:
-            print(f'WARNING: Bot is NOT in configured guild {guild_id}. Available guilds: {guilds}')
+            print(f'WARNING: A bot NINCS a beállított szerverben {guild_id}. Elérhető szerverek: {guilds}')
             if client.guilds:
                 guild = client.guilds[0]
                 guild_id = guild.id
-                print(f'Falling back to first available guild: {guild.name} (ID: {guild_id})')
+                print(f'Fallback: első elérhető szerver: {guild.name} (ID: {guild_id})')
             else:
-                print('ERROR: Bot is not in any guilds. Cannot sync commands.')
+                print('ERROR: A bot nincs egyetlen szerverben sem. Nem lehet parancsokat szinkronizálni.')
                 sys.stdout.flush()
                 return
         sys.stdout.flush()
@@ -72,10 +72,10 @@ async def on_ready():
                 await tree.delete_command(cmd.name, guild=guild_obj)
             print("Existing commands cleared")
         except Exception as e:
-            print(f"Could not clear: {e}")
+            print(f"Nem sikerült törölni a korábbi parancsokat: {e}")
         
         # Sync
-        print(f'Syncing to guild {guild_id}...')
+        print(f'Szinkronizálás a szerverre: {guild_id}...')
         try:
             synced = await tree.sync(guild=guild_obj)
             print(f'Sync returned: {[c.name for c in synced]} ({len(synced)} commands)')
@@ -86,13 +86,12 @@ async def on_ready():
         # Verify
         await asyncio.sleep(2)
         commands = await tree.fetch_commands(guild=guild_obj)
-        print(f"FINAL - Registered commands: {[c.name for c in commands]}")
-        print(f"FINAL - Total: {len(commands)}")
+        print(f"VÉGLEGES - Regisztrált parancsok: {[c.name for c in commands]}")
+        print(f"VÉGLEGES - Összesen: {len(commands)}")
         sys.stdout.flush()
         
-        if len(cmd_names) == 0:
-            print('WARNING: No commands registered. Checking permissions...')
-            # Check if bot has applications.commands scope
+        if len(commands) == 0:
+            print('FIGYELEM: Nincsenek regisztrált parancsok. Jogosultságok ellenőrzése...')
             print(f'Bot scope: {client.user.public_flags}')
             print(f'Bot mentions: {client.user.mention}')
         sys.stdout.flush()
@@ -102,8 +101,8 @@ async def on_ready():
         traceback.print_exc()
         sys.stdout.flush()
 
-@tree.command(name="tournamentqueue", description="Create a tournament queue")
-@app_commands.describe(name="Tournament name", timestamp="End timestamp")
+@tree.command(name="tournamentqueue", description="Tournament létrehozása")
+@app_commands.describe(name="Tournament neve", timestamp="Befejezés időpontja")
 async def tournamentqueue(interaction: discord.Interaction, name: str, timestamp: str):
     end_time = int(timestamp.replace('<t:', '').replace(':R>', ''))
 
@@ -117,15 +116,15 @@ async def tournamentqueue(interaction: discord.Interaction, name: str, timestamp
         }).execute()
         tournament_id = response.data[0]['id']
     except APIError as e:
-        print(f"Supabase insert error: {e}")
-        await interaction.response.send_message(f"Failed to create tournament: {e}", ephemeral=True)
+        print(f"Hiba a tournament létrehozásakor: {e}")
+        await interaction.response.send_message(f"Nem sikerült létrehozni a tournamentt: {e}", ephemeral=True)
         return
 
     embed = discord.Embed(title=f"{name} Tournament", description=f"Csatlakozási határidő: <t:{end_time}:R>", color=0x00FF00)
     embed.add_field(name="Játékosok:", value="None yet")
 
-    join_button = discord.ui.Button(label="Belépés a tournamentbe", style=discord.ButtonStyle.primary, custom_id=f"join_tournament_{tournament_id}")
-    leave_button = discord.ui.Button(label="Kilépés a tournamentből", style=discord.ButtonStyle.secondary, custom_id=f"leave_tournament_{tournament_id}")
+    join_button = discord.ui.Button(label="Belépés a tournamentba", style=discord.ButtonStyle.primary, custom_id=f"join_tournament_{tournament_id}")
+    leave_button = discord.ui.Button(label="Kilépés a tournamentból", style=discord.ButtonStyle.secondary, custom_id=f"leave_tournament_{tournament_id}")
     view = discord.ui.View()
     view.add_item(join_button)
     view.add_item(leave_button)
@@ -136,7 +135,7 @@ async def tournamentqueue(interaction: discord.Interaction, name: str, timestamp
     try:
         supabase.table('tournaments').update({'queue_message_id': message.id}).eq('id', tournament_id).execute()
     except APIError as e:
-        print(f"Failed to update queue_message_id: {e}")
+        print(f"Nem sikerült frissíteni a queue_message_id-t: {e}")
 
     # Set timer
     delay = end_time * 1000 - time.time() * 1000
@@ -145,14 +144,14 @@ async def tournamentqueue(interaction: discord.Interaction, name: str, timestamp
     # Start tournament regardless (if delay <= 0, start immediately)
     try:
         await start_tournament(tournament_id)
-    except Exception as e:
-        print(f"Error auto-starting tournament: {e}")
+        except Exception as e:
+            print(f"Hiba a tournament automatikus indításakor: {e}")
 
-@tree.command(name="tournamentround", description="Start or stop a tournament round manually")
+@tree.command(name="tournamentround", description="Kör indítása/leállítása")
 @app_commands.describe(
-    action="start or stop",
-    tournament_id="Tournament database ID",
-    round_number="Round number to start/stop"
+    action="Indítás vagy leállítás",
+    tournament_id="Tournament azonosító",
+    round_number="Kör száma"
 )
 async def tournamentround(interaction: discord.Interaction, action: str, tournament_id: str, round_number: int):
     await interaction.response.defer(ephemeral=True)
@@ -161,18 +160,18 @@ async def tournamentround(interaction: discord.Interaction, action: str, tournam
         tournament_uuid = tournament_id
         tournament_response = supabase.table('tournaments').select('*').eq('id', tournament_uuid).execute()
         if not tournament_response.data:
-            await interaction.followup.send("Tournament not found.", ephemeral=True)
+            await interaction.followup.send("Tournament nem található.", ephemeral=True)
             return
         tournament = tournament_response.data[0]
         
         if action.lower() == 'start':
             if tournament['status'] not in ['open', 'active']:
-                await interaction.followup.send("Tournament must be open or active to start a round.", ephemeral=True)
+                await interaction.followup.send("A tournamentnak nyitottnak vagy aktívnak kell lennie a kör indításához.", ephemeral=True)
                 return
             
             players = tournament['players']
             if len(players) < 2:
-                await interaction.followup.send("Not enough players to start a round (minimum 2 required).", ephemeral=True)
+                await interaction.followup.send("Nincs elég játékos a kör indításához (min. 2 szükséges).", ephemeral=True)
                 return
             
             shuffled = players[:]
@@ -187,7 +186,7 @@ async def tournamentround(interaction: discord.Interaction, action: str, tournam
             category_id = int(os.getenv('TICKET_CATEGORY_ID'))
             category = guild.get_channel(category_id)
             if not category or not isinstance(category, discord.CategoryChannel):
-                await interaction.followup.send(f"Invalid ticket category ID: {category_id}", ephemeral=True)
+                await interaction.followup.send(f"Érvénytelen jegykategória ID: {category_id}", ephemeral=True)
                 return
             
             for match in matches:
@@ -226,10 +225,10 @@ async def tournamentround(interaction: discord.Interaction, action: str, tournam
                 try:
                     channel = await guild.create_text_channel(channel_name, category=category, overwrites=overwrites)
                 except discord.Forbidden:
-                    await interaction.followup.send("Bot lacks permission to create channels in this category.", ephemeral=True)
+                    await interaction.followup.send("A botnak nincs jogosultsága csatornák létrehozására ebben a kategóriában.", ephemeral=True)
                     return
                 embed = discord.Embed(title=f"Tournament {round_number}. kör", description=f"{match['p1']['minecraft_name']} vs {match['p2']['minecraft_name']}\nSok sikert!", color=0x0000FF)
-                close_button = discord.ui.Button(label="Close ticket", style=discord.ButtonStyle.danger, custom_id=f"close_ticket_{tournament_uuid}_{match['p1']['minecraft_name']}_{match['p2']['minecraft_name']}")
+                close_button = discord.ui.Button(label="Jegy lezárása", style=discord.ButtonStyle.danger, custom_id=f"close_ticket_{tournament_uuid}_{match['p1']['minecraft_name']}_{match['p2']['minecraft_name']}")
                 result_button = discord.ui.Button(label="eredmény beírása", style=discord.ButtonStyle.primary, custom_id=f"result_{tournament_uuid}_{match['p1']['minecraft_name']}_{match['p2']['minecraft_name']}")
                 view = discord.ui.View()
                 view.add_item(close_button)
@@ -244,21 +243,21 @@ async def tournamentround(interaction: discord.Interaction, action: str, tournam
                         'ticket_channel_id': channel.id
                     }).execute()
                 except APIError as e:
-                    print(f"Failed to insert match: {e}")
+                    print(f"Nem sikerült beszúrni a mérkőzést: {e}")
             
             supabase.table('tournaments').update({'current_round': round_number, 'status': 'active'}).eq('id', tournament_uuid).execute()
-            await interaction.followup.send(f"Round {round_number} started with {len(matches)} matches.", ephemeral=True)
+            await interaction.followup.send(f"{round_number}. kör indítva {len(matches)} mérkőzéssel.", ephemeral=True)
             
         elif action.lower() == 'stop':
             matches_response = supabase.table('matches').select('*').eq('tournament_id', tournament_uuid).eq('round', round_number).execute()
             if not matches_response.data:
-                await interaction.followup.send("No matches found for this round.", ephemeral=True)
+                await interaction.followup.send("Nincsenek mérkőzések ebben a körben.", ephemeral=True)
                 return
             
         elif action.lower() == 'stop':
             matches_response = supabase.table('matches').select('*').eq('tournament_id', tournament_uuid).eq('round', round_number).execute()
             if not matches_response.data:
-                await interaction.followup.send("No matches found for this round.", ephemeral=True)
+                await interaction.followup.send("Nincsenek mérkőzések ebben a körben.", ephemeral=True)
                 return
             
             deleted_channels = 0
@@ -266,43 +265,43 @@ async def tournamentround(interaction: discord.Interaction, action: str, tournam
                 if match['ticket_channel_id']:
                     channel = await client.fetch_channel(match['ticket_channel_id'])
                     if channel:
-                        try:
-                            await channel.delete()
-                            deleted_channels += 1
-                        except discord.Forbidden:
-                            print("Bot lacks Manage Channels permission to delete ticket")
-                        except Exception as e:
-                            print(f"Error deleting channel: {e}")
+                try:
+                    await channel.delete()
+                    print(f"Jegycsatorna törölve: {channel_id}")
+                except discord.Forbidden:
+                    print("Botnak nincs 'Csatornák kezelése' jogosultsága a jegy törléséhez")
+                except Exception as e:
+                    print(f"Hiba a csatorna törlésekor: {e}")
             
             supabase.table('matches').delete().eq('tournament_id', tournament_uuid).eq('round', round_number).execute()
-            await interaction.followup.send(f"Round {round_number} stopped. Deleted {deleted_channels} ticket channels.", ephemeral=True)
-            
+            await interaction.followup.send(f"{round_number}. kör leállítva. {deleted_channels} jegycsatorna törölve.", ephemeral=True)
+        
         else:
-            await interaction.followup.send("Invalid action. Use 'start' or 'stop'.", ephemeral=True)
+            await interaction.followup.send("Érvénytelen művelet. Használj 'start' vagy 'stop'.", ephemeral=True)
             
     except APIError as e:
         print(f"Error in tournamentround: {e}")
-        await interaction.followup.send(f"Database error: {e}", ephemeral=True)
+        await interaction.followup.send(f"Adatbázis hiba: {e}", ephemeral=True)
     except Exception as e:
-        print(f"Unexpected error in tournamentround: {e}")
-        await interaction.followup.send(f"Error: {e}", ephemeral=True)
+        print(f"Váratlan hiba in tournamentround: {e}")
+        await interaction.followup.send(f"Hiba: {e}", ephemeral=True)
 
 
-@tree.command(name="tournamentaddticket", description="Add all tournament players to their ticket channels (debug)")
-@app_commands.describe(tournament_id="Tournament database ID")
+@tree.command(name="tournamentaddticket", description="Játékosok hozzáadása jegycsatornákhoz (debug)")
+@app_commands.describe(tournament_id="Tournament azonosító")
 async def tournamentaddticket(interaction: discord.Interaction, tournament_id: str):
     await interaction.response.defer(ephemeral=True)
     
     try:
         tournament_response = supabase.table('tournaments').select('*').eq('id', tournament_id).execute()
         if not tournament_response.data:
-            await interaction.followup.send("Tournament not found.", ephemeral=True)
+            await interaction.followup.send("Tournament nem található.", ephemeral=True)
             return
         
         tournament = tournament_response.data[0]
         players = tournament['players']
         if not players:
-            await interaction.followup.send("No players in tournament.", ephemeral=True)
+            await interaction.followup.send("Nincsenek játékosok a tournamentban.", ephemeral=True)
             return
         
         guild = client.get_guild(int(os.getenv('GUILD_ID')))
@@ -310,7 +309,7 @@ async def tournamentaddticket(interaction: discord.Interaction, tournament_id: s
         
         matches_response = supabase.table('matches').select('*').eq('tournament_id', tournament_id).execute()
         if not matches_response.data:
-            await interaction.followup.send("No matches found. Start a round first.", ephemeral=True)
+            await interaction.followup.send("Nincsenek mérkőzések. Indíts egy kört először.", ephemeral=True)
             return
         
         updated = 0
@@ -354,18 +353,18 @@ async def tournamentaddticket(interaction: discord.Interaction, tournament_id: s
                 print(f"Failed to update channel {channel_id}: {e}")
                 continue
         
-        await interaction.followup.send(f"Updated {updated} ticket channels with player permissions.", ephemeral=True)
+        await interaction.followup.send(f"{updated} jegycsatorna frissítve a játékos jogosultságokkal.", ephemeral=True)
         
     except APIError as e:
         print(f"Error in tournamentaddticket: {e}")
-        await interaction.followup.send(f"Database error: {e}", ephemeral=True)
+        await interaction.followup.send(f"Adatbázis hiba: {e}", ephemeral=True)
     except Exception as e:
-        print(f"Unexpected error in tournamentaddticket: {e}")
-        await interaction.followup.send(f"Error: {e}", ephemeral=True)
+        print(f"Váratlan hiba in tournamentaddticket: {e}")
+        await interaction.followup.send(f"Hiba: {e}", ephemeral=True)
 
 
-@tree.command(name="tournamentfixpermissions", description="Fix bot permissions in all ticket channels")
-@app_commands.describe(tournament_id="Tournament database ID")
+@tree.command(name="tournamentfixpermissions", description="Bot jogosultság javítása összes jegycsatornában")
+@app_commands.describe(tournament_id="Tournament azonosító")
 async def tournamentfixpermissions(interaction: discord.Interaction, tournament_id: str):
     await interaction.response.defer(ephemeral=True)
     
@@ -375,7 +374,7 @@ async def tournamentfixpermissions(interaction: discord.Interaction, tournament_
         
         matches_response = supabase.table('matches').select('*').eq('tournament_id', tournament_id).execute()
         if not matches_response.data:
-            await interaction.followup.send("No matches found.", ephemeral=True)
+            await interaction.followup.send("Nincsenek mérkőzések.", ephemeral=True)
             return
         
         updated = 0
@@ -401,24 +400,24 @@ async def tournamentfixpermissions(interaction: discord.Interaction, tournament_
                 print(f"Failed to update channel {channel_id}: {e}")
                 continue
         
-        await interaction.followup.send(f"Fixed bot permissions in {updated} ticket channels.", ephemeral=True)
+        await interaction.followup.send(f"Bot jogosultságai javítva {updated} jegycsatornában.", ephemeral=True)
         
     except APIError as e:
         print(f"Error in tournamentfixpermissions: {e}")
-        await interaction.followup.send(f"Database error: {e}", ephemeral=True)
+        await interaction.followup.send(f"Adatbázis hiba: {e}", ephemeral=True)
     except Exception as e:
-        print(f"Unexpected error in tournamentfixpermissions: {e}")
-        await interaction.followup.send(f"Error: {e}", ephemeral=True)
+        print(f"Váratlan hiba in tournamentfixpermissions: {e}")
+        await interaction.followup.send(f"Hiba: {e}", ephemeral=True)
 
 
-@tree.command(name="sync", description="Force sync slash commands (admin only)")
+@tree.command(name="sync", description="Parancsok szinkronizálása (csak admin)")
 async def sync_commands(interaction: discord.Interaction):
     # Check if user has admin role
     admin_role_id = os.getenv('ADMIN_ROLE_ID')
     if admin_role_id:
         admin_role = interaction.guild.get_role(int(admin_role_id))
         if admin_role and admin_role not in interaction.user.roles:
-            await interaction.response.send_message("You need the admin role to use this command.", ephemeral=True)
+            await interaction.response.send_message("Adminisztrátori szerepkör szükséges a parancs használatához.", ephemeral=True)
             return
     
     await interaction.response.defer(ephemeral=True)
@@ -427,21 +426,21 @@ async def sync_commands(interaction: discord.Interaction):
         await tree.sync(guild=discord.Object(id=guild_id))
         commands = await tree.fetch_commands(guild=discord.Object(id=guild_id))
         await interaction.followup.send(
-            f"Commands synced to guild: {', '.join([cmd.name for cmd in commands])}",
+            f"Parancsok szinkronizálva a szerverre: {', '.join([cmd.name for cmd in commands])}",
             ephemeral=True
         )
     except Exception as e:
-        await interaction.followup.send(f"Sync failed: {e}", ephemeral=True)
+        await interaction.followup.send(f"Szinkronizálás sikertelen: {e}", ephemeral=True)
 
 
-@tree.command(name="syncglobal", description="Force global sync (admin only)")
+@tree.command(name="syncglobal", description="Globális szinkronizálás (csak admin)")
 async def sync_global(interaction: discord.Interaction):
     # Check if user has admin role
     admin_role_id = os.getenv('ADMIN_ROLE_ID')
     if admin_role_id:
         admin_role = interaction.guild.get_role(int(admin_role_id))
         if admin_role and admin_role not in interaction.user.roles:
-            await interaction.response.send_message("You need the admin role to use this command.", ephemeral=True)
+            await interaction.response.send_message("Adminisztrátori szerepkör szükséges a parancs használatához.", ephemeral=True)
             return
     
     await interaction.response.defer(ephemeral=True)
@@ -449,11 +448,11 @@ async def sync_global(interaction: discord.Interaction):
         await tree.sync()
         commands = await tree.fetch_commands()
         await interaction.followup.send(
-            f"Global commands synced: {', '.join([cmd.name for cmd in commands])}",
+            f"Globális parancsok szinkronizálva: {', '.join([cmd.name for cmd in commands])}",
             ephemeral=True
         )
     except Exception as e:
-        await interaction.followup.send(f"Sync failed: {e}", ephemeral=True)
+        await interaction.followup.send(f"Szinkronizálás sikertelen: {e}", ephemeral=True)
 
 
 @client.event
@@ -471,28 +470,28 @@ async def on_interaction(interaction: discord.Interaction):
                 pass
             linked_response = supabase.table('linked_accounts').select('minecraft_name').eq('discord_id', interaction.user.id).execute()
             if not linked_response.data:
-                await interaction.followup.send("You must link your Minecraft account first.", ephemeral=True)
+                await interaction.followup.send("Először csatlakoztatni kell a Minecraft fiókot.", ephemeral=True)
                 return
             minecraft_name = linked_response.data[0]['minecraft_name']
             tournament_response = supabase.table('tournaments').select('*').eq('id', tournament_id).execute()
             if not tournament_response.data or tournament_response.data[0]['status'] != 'open':
-                await interaction.followup.send("Tournament not open.", ephemeral=True)
+                await interaction.followup.send("A tournament nincs nyitva.", ephemeral=True)
                 return
             tournament = tournament_response.data[0]
             players = tournament['players']
             if any(p['discord_id'] == interaction.user.id for p in players):
-                await interaction.followup.send("You already joined.", ephemeral=True)
+                await interaction.followup.send("Már csatlakoztál.", ephemeral=True)
                 return
             new_players = players + [{'discord_id': interaction.user.id, 'minecraft_name': minecraft_name}]
             supabase.table('tournaments').update({'players': new_players}).eq('id', tournament_id).execute()
             channel = interaction.channel
             message = await channel.fetch_message(tournament['queue_message_id'])
             embed = message.embeds[0]
-            players_list = '\n'.join([f"<@{p['discord_id']}> ({p['minecraft_name']})" for p in new_players]) or 'None yet'
+            players_list = '\n'.join([f"<@{p['discord_id']}> ({p['minecraft_name']})" for p in new_players]) or 'Még senki'
             new_embed = discord.Embed.from_dict(embed.to_dict())
             new_embed.set_field_at(0, name="Játékosok:", value=players_list)
             await message.edit(embed=new_embed)
-            await interaction.followup.send("Joined the tournament!", ephemeral=True)
+            await interaction.followup.send("Sikeresen csatlakoztál a tournamenthoz!", ephemeral=True)
 
         elif custom_id.startswith('leave_tournament_'):
             tournament_id = custom_id.split('_')[2]
@@ -502,7 +501,7 @@ async def on_interaction(interaction: discord.Interaction):
                 pass
             tournament_response = supabase.table('tournaments').select('*').eq('id', tournament_id).execute()
             if not tournament_response.data or tournament_response.data[0]['status'] != 'open':
-                await interaction.followup.send("Tournament not open.", ephemeral=True)
+                await interaction.followup.send("A tournament nincs nyitva.", ephemeral=True)
                 return
             tournament = tournament_response.data[0]
             players = tournament['players']
@@ -511,11 +510,11 @@ async def on_interaction(interaction: discord.Interaction):
             channel = interaction.channel
             message = await channel.fetch_message(tournament['queue_message_id'])
             embed = message.embeds[0]
-            players_list = '\n'.join([f"<@{p['discord_id']}> ({p['minecraft_name']})" for p in new_players]) or 'None yet'
+            players_list = '\n'.join([f"<@{p['discord_id']}> ({p['minecraft_name']})" for p in new_players]) or 'Még senki'
             new_embed = discord.Embed.from_dict(embed.to_dict())
             new_embed.set_field_at(0, name="Játékosok:", value=players_list)
             await message.edit(embed=new_embed)
-            await interaction.followup.send("Left the tournament!", ephemeral=True)
+            await interaction.followup.send("Kiléptél a tournamentból!", ephemeral=True)
 
         elif custom_id.startswith('close_ticket_'):
             parts = custom_id.split('_')
@@ -536,11 +535,11 @@ async def on_interaction(interaction: discord.Interaction):
                     try:
                         await channel.delete()
                     except discord.Forbidden:
-                        print("Bot lacks Manage Channels permission to delete ticket")
+                        print("Botnak nincs 'Csatornák kezelése' jogosultsága a jegy törléséhez")
                     except Exception as e:
-                        print(f"Error deleting channel: {e}")
+                        print(f"Hiba a csatorna törlésekor: {e}")
             
-            await interaction.followup.send("Ticket closed.", ephemeral=True)
+            await interaction.followup.send("Jegy lezárva.", ephemeral=True)
 
         elif custom_id.startswith('result_'):
             parts = custom_id.split('_')
@@ -551,13 +550,13 @@ async def on_interaction(interaction: discord.Interaction):
                 await interaction.response.defer(ephemeral=True)
             except Exception:
                 pass
-            select = discord.ui.Select(placeholder="Select winner", options=[
-                discord.SelectOption(label=f"{p1} won", value=f"{p1}_win"),
-                discord.SelectOption(label=f"{p2} won", value=f"{p2}_win")
+            select = discord.ui.Select(placeholder="Válassz győztest", options=[
+                discord.SelectOption(label=f"{p1} nyert", value=f"{p1}_win"),
+                discord.SelectOption(label=f"{p2} nyert", value=f"{p2}_win")
             ], custom_id=f"select_winner_{tournament_id}_{p1}_{p2}")
             view = discord.ui.View()
             view.add_item(select)
-            await interaction.followup.send("Select the winner:", view=view, ephemeral=True)
+            await interaction.followup.send("Válaszd ki a győztest:", view=view, ephemeral=True)
 
         elif custom_id.startswith('select_winner_'):
             parts = custom_id.split('_')
@@ -571,16 +570,16 @@ async def on_interaction(interaction: discord.Interaction):
     except APIError as e:
         print(f"Supabase interaction error: {e}")
         try:
-            await interaction.response.send_message(f"An error occurred: {e}", ephemeral=True)
+            await interaction.response.send_message(f"Hiba történt: {e}", ephemeral=True)
         except:
             try:
-                await interaction.followup.send(f"An error occurred: {e}", ephemeral=True)
+                await interaction.followup.send(f"Hiba történt: {e}", ephemeral=True)
             except:
                 pass
 
 
-class ScoreModal(discord.ui.Modal, title="Enter Score"):
-    score = discord.ui.TextInput(label="Score (e.g., 7-3)", style=discord.TextStyle.short, required=True)
+class ScoreModal(discord.ui.Modal, title="Pontozás"):
+    score = discord.ui.TextInput(label="Pontszám (pl. 7-3)", style=discord.TextStyle.short, required=True)
 
     def __init__(self, tournament_id, p1, p2, winner):
         super().__init__()
@@ -595,10 +594,9 @@ class ScoreModal(discord.ui.Modal, title="Enter Score"):
         try:
             supabase.table('matches').update({'winner': self.winner, 'score': score}).eq('tournament_id', self.tournament_id).eq('player1', self.p1).eq('player2', self.p2).execute()
         except APIError as e:
-            print(f"Failed to update match result: {e}")
-        
+            print(f"Nem sikerült frissíteni a mérkőzés eredményét: {e}")
         results_channel = await client.fetch_channel(int(os.getenv('RESULTS_CHANNEL_ID')))
-        await results_channel.send(f"{self.p1} vs {self.p2}: {self.winner} won {score}")
+        await results_channel.send(f"{self.p1} vs {self.p2}: {self.winner} nyert {score}-val")
         
         match_response = supabase.table('matches').select('ticket_channel_id').eq('tournament_id', self.tournament_id).eq('player1', self.p1).eq('player2', self.p2).execute()
         if match_response.data:
@@ -607,21 +605,22 @@ class ScoreModal(discord.ui.Modal, title="Enter Score"):
             if channel:
                 try:
                     await channel.delete()
-                    print(f"Deleted ticket channel {channel_id}")
+                    print(f"Jegycsatorna törölve: {channel_id}")
                 except discord.Forbidden:
-                    print("Bot lacks Manage Channels permission to delete ticket")
+                    print("Botnak nincs 'Csatornák kezelése' jogosultsága a jegy törléséhez")
                 except Exception as e:
-                    print(f"Error deleting channel: {e}")
+                    print(f"Hiba a csatorna törlésekor: {e}")
         
         await check_round_complete(self.tournament_id)
-        await interaction.followup.send("Result submitted.", ephemeral=True)
+        await interaction.followup.send("Eredmény elküldve.", ephemeral=True)
 
 
 async def start_tournament(tournament_id):
     try:
-        tournament_response = supabase.table('tournaments').select('*').eq('id', tournament_id).execute()
-        if not tournament_response.data or tournament_response.data[0]['status'] != 'open':
-            return
+            tournament_response = supabase.table('tournaments').select('*').eq('id', tournament_id).execute()
+            if not tournament_response.data or tournament_response.data[0]['status'] != 'open':
+                await interaction.followup.send("A tournament nincs nyitva.", ephemeral=True)
+                return
     except APIError as e:
         print(f"Error starting tournament: {e}")
         return
@@ -678,14 +677,14 @@ async def start_tournament(tournament_id):
         category_id = int(os.getenv('TICKET_CATEGORY_ID'))
         category = guild.get_channel(category_id)
         if not category or not isinstance(category, discord.CategoryChannel):
-            print(f"Invalid ticket category: {category_id}")
-            return
-        
-        for match in matches:
-            channel_name = f"t-r1-{match['p1']['minecraft_name']}-{match['p2']['minecraft_name']}"
-            overwrites = {
-                guild.default_role: discord.PermissionOverwrite(view_channel=False, send_messages=False)
-            }
+        print(f"Érvénytelen jegykategória: {category_id}")
+        return
+    
+    for match in matches:
+        channel_name = f"t-r1-{match['p1']['minecraft_name']}-{match['p2']['minecraft_name']}"
+        overwrites = {
+            guild.default_role: discord.PermissionOverwrite(view_channel=False, send_messages=False)
+        }
             # Bot access using Object ID
             overwrites[discord.Object(id=client.user.id)] = discord.PermissionOverwrite(
                 view_channel=True,
@@ -705,14 +704,14 @@ async def start_tournament(tournament_id):
             try:
                 channel = await guild.create_text_channel(channel_name, category=category, overwrites=overwrites)
             except discord.Forbidden:
-                print("Bot lacks permission to create channels in ticket category")
+                print("Botnak nincs jogosultsága csatornák létrehozására a jegykategóriában")
                 return
             except Exception as e:
-                print(f"Error creating channel: {e}")
+                print(f"Hiba a csatorna létrehozésekor: {e}")
                 return
             
             embed = discord.Embed(title="Tournament 1. kör", description=f"{match['p1']['minecraft_name']} vs {match['p2']['minecraft_name']}\nSok sikert!", color=0x0000FF)
-            close_button = discord.ui.Button(label="Close ticket", style=discord.ButtonStyle.danger, custom_id=f"close_ticket_{tournament_id}_{match['p1']['minecraft_name']}_{match['p2']['minecraft_name']}")
+            close_button = discord.ui.Button(label="Jegy lezárása", style=discord.ButtonStyle.danger, custom_id=f"close_ticket_{tournament_id}_{match['p1']['minecraft_name']}_{match['p2']['minecraft_name']}")
             result_button = discord.ui.Button(label="eredmény beírása", style=discord.ButtonStyle.primary, custom_id=f"result_{tournament_id}_{match['p1']['minecraft_name']}_{match['p2']['minecraft_name']}")
             view = discord.ui.View()
             view.add_item(close_button)
@@ -720,7 +719,7 @@ async def start_tournament(tournament_id):
             try:
                 await channel.send(embed=embed, view=view)
             except Exception as e:
-                print(f"Failed to send embed to channel: {e}")
+                print(f"Nem sikerült elküldeni az embedet a csatornában: {e}")
                 return
             
             try:
@@ -732,7 +731,7 @@ async def start_tournament(tournament_id):
                     'ticket_channel_id': channel.id
                 }).execute()
             except APIError as e:
-                print(f"Failed to insert match: {e}")
+                print(f"Nem sikerült beszúrni a mérkőzést: {e}")
     except Exception as e:
         print(f"Unexpected error in start_tournament: {e}")
 
@@ -797,14 +796,14 @@ async def start_round(tournament_id, round_num):
         category_id = int(os.getenv('TICKET_CATEGORY_ID'))
         category = guild.get_channel(category_id)
         if not category or not isinstance(category, discord.CategoryChannel):
-            print(f"Invalid ticket category: {category_id}")
-            return
-        
-        for match in matches:
-            channel_name = f"t-r{round_num}-{match['p1']['minecraft_name']}-{match['p2']['minecraft_name']}"
-            overwrites = {
-                guild.default_role: discord.PermissionOverwrite(view_channel=False, send_messages=False)
-            }
+        print(f"Érvénytelen jegykategória: {category_id}")
+        return
+    
+    for match in matches:
+        channel_name = f"t-r{round_num}-{match['p1']['minecraft_name']}-{match['p2']['minecraft_name']}"
+        overwrites = {
+            guild.default_role: discord.PermissionOverwrite(view_channel=False, send_messages=False)
+        }
             # Bot access using Object ID
             overwrites[discord.Object(id=client.user.id)] = discord.PermissionOverwrite(
                 view_channel=True,
@@ -824,14 +823,14 @@ async def start_round(tournament_id, round_num):
             try:
                 channel = await guild.create_text_channel(channel_name, category=category, overwrites=overwrites)
             except discord.Forbidden:
-                print("Bot lacks permission to create channels in ticket category")
+                print("Botnak nincs jogosultsága csatornák létrehozására a jegykategóriában")
                 return
             except Exception as e:
-                print(f"Error creating channel: {e}")
+                print(f"Hiba a csatorna létrehozésekor: {e}")
                 return
             
             embed = discord.Embed(title=f"Tournament {round_num}. kör", description=f"{match['p1']['minecraft_name']} vs {match['p2']['minecraft_name']}\nSok sikert!", color=0x0000FF)
-            close_button = discord.ui.Button(label="Close ticket", style=discord.ButtonStyle.danger, custom_id=f"close_ticket_{tournament_id}_{match['p1']['minecraft_name']}_{match['p2']['minecraft_name']}")
+            close_button = discord.ui.Button(label="Jegy lezárása", style=discord.ButtonStyle.danger, custom_id=f"close_ticket_{tournament_id}_{match['p1']['minecraft_name']}_{match['p2']['minecraft_name']}")
             result_button = discord.ui.Button(label="eredmény beírása", style=discord.ButtonStyle.primary, custom_id=f"result_{tournament_id}_{match['p1']['minecraft_name']}_{match['p2']['minecraft_name']}")
             view = discord.ui.View()
             view.add_item(close_button)
@@ -839,7 +838,7 @@ async def start_round(tournament_id, round_num):
             try:
                 await channel.send(embed=embed, view=view)
             except Exception as e:
-                print(f"Failed to send embed to channel: {e}")
+                print(f"Nem sikerült elküldeni az embedet a csatornában: {e}")
                 return
             
             try:
@@ -851,7 +850,7 @@ async def start_round(tournament_id, round_num):
                     'ticket_channel_id': channel.id
                 }).execute()
             except APIError as e:
-                print(f"Failed to insert match: {e}")
+                print(f"Nem sikerült beszúrni a mérkőzést: {e}")
     except Exception as e:
         print(f"Unexpected error in start_round: {e}")
 
@@ -868,7 +867,7 @@ async def check_round_complete(tournament_id):
             winners = [m['winner'] for m in matches_response.data]
             if len(winners) == 1:
                 results_channel = await client.fetch_channel(int(os.getenv('RESULTS_CHANNEL_ID')))
-                await results_channel.send(f"Tournament winner: {winners[0]}")
+                await results_channel.send(f"Tournament győztes: {winners[0]}")
                 supabase.table('tournaments').update({'status': 'finished'}).eq('id', tournament_id).execute()
                 return
             winners_with_discord = []
