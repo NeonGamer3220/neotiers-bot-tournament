@@ -723,30 +723,30 @@ async def start_tournament(tournament_id):
         category_id = int(os.getenv('TICKET_CATEGORY_ID'))
         category = guild.get_channel(category_id)
         if not category or not isinstance(category, discord.CategoryChannel):
-        print(f"Érvénytelen jegykategória: {category_id}")
-        return
+            print(f"Érvénytelen jegykategória: {category_id}")
+            return
     
-    for match in matches:
-        channel_name = f"t-r1-{match['p1']['minecraft_name']}-{match['p2']['minecraft_name']}"
-        overwrites = {
-            guild.default_role: discord.PermissionOverwrite(view_channel=False, send_messages=False)
-        }
-        # Bot access using Object ID
-        overwrites[discord.Object(id=client.user.id)] = discord.PermissionOverwrite(
-            view_channel=True,
-            send_messages=True,
-            manage_channels=True,
-            manage_permissions=True,
-            read_message_history=True
-        )
-        # Player access using Object IDs (works without member cache)
-        overwrites[discord.Object(id=match['p1']['discord_id'])] = discord.PermissionOverwrite(
-            view_channel=True, send_messages=True, read_message_history=True
-        )
-        overwrites[discord.Object(id=match['p2']['discord_id'])] = discord.PermissionOverwrite(
-            view_channel=True, send_messages=True, read_message_history=True
-        )
-            
+        for match in matches:
+            channel_name = f"t-r1-{match['p1']['minecraft_name']}-{match['p2']['minecraft_name']}"
+            overwrites = {
+                guild.default_role: discord.PermissionOverwrite(view_channel=False, send_messages=False)
+            }
+            # Bot access using Object ID
+            overwrites[discord.Object(id=client.user.id)] = discord.PermissionOverwrite(
+                view_channel=True,
+                send_messages=True,
+                manage_channels=True,
+                manage_permissions=True,
+                read_message_history=True
+            )
+            # Player access using Object IDs (works without member cache)
+            overwrites[discord.Object(id=match['p1']['discord_id'])] = discord.PermissionOverwrite(
+                view_channel=True, send_messages=True, read_message_history=True
+            )
+            overwrites[discord.Object(id=match['p2']['discord_id'])] = discord.PermissionOverwrite(
+                view_channel=True, send_messages=True, read_message_history=True
+            )
+                
             try:
                 channel = await guild.create_text_channel(channel_name, category=category, overwrites=overwrites)
             except discord.Forbidden:
@@ -890,8 +890,8 @@ async def start_round(tournament_id, round_num):
         category_id = int(os.getenv('TICKET_CATEGORY_ID'))
         category = guild.get_channel(category_id)
         if not category or not isinstance(category, discord.CategoryChannel):
-        print(f"Érvénytelen jegykategória: {category_id}")
-        return
+            print(f"Érvénytelen jegykategória: {category_id}")
+            return
     
         for match in matches:
             channel_name = f"t-r{round_num}-{match['p1']['minecraft_name']}-{match['p2']['minecraft_name']}"
