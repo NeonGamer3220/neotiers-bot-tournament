@@ -11,7 +11,6 @@ import time
 
 intents = discord.Intents.default()
 intents.guilds = True
-intents.members = True  # Needed to look up members for channel permissions
 client = discord.Client(intents=intents)
 tree = app_commands.CommandTree(client)
 
