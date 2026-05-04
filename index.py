@@ -601,14 +601,7 @@ class ScoreModal(discord.ui.Modal, title="Pontozás"):
         except APIError as e:
             print(f"Nem sikerült frissíteni a mérkőzés eredményét: {e}")
         
-        # Try to send to results channel, but don't block if it fails
-        try:
-            results_channel = await client.fetch_channel(int(os.getenv('RESULTS_CHANNEL_ID')))
-            await results_channel.send(f"{self.p1} vs {self.p2}: {self.winner} nyert {score}-val")
-        except Exception as e:
-            print(f"Could not send to results channel: {e}")
-        
-        # Delete ticket channel if exists
+        # Try to delete ticket channel if exists
         try:
             match_response = supabase.table('matches').select('ticket_channel_id').eq('tournament_id', self.tournament_id).eq('player1', self.p1).eq('player2', self.p2).execute()
             if match_response.data:
