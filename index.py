@@ -75,16 +75,19 @@ async def on_ready():
         
         # Sync
         print(f'Szinkronizálás a szerverre: {guild_id}...')
-        try:
-            await asyncio.sleep(5)  # Increased wait time
-            synced = await tree.sync(guild=guild_obj)
-            print(f'Sync returned: {[c.name for c in synced]} ({len(synced)} commands)')
-        except Exception as e:
-            print(f'Sync error: {e}')
-            import traceback; traceback.print_exc()
+        for attempt in range(3):
+            try:
+                synced = await tree.sync(guild=guild_obj)
+                print(f'Sync returned: {[c.name for c in synced]} ({len(synced)} commands)')
+                if len(synced) > 0:
+                    break
+            except Exception as e:
+                print(f'Sync error (attempt {attempt+1}): {e}')
+                import traceback; traceback.print_exc()
+            await asyncio.sleep(2)
         
         # Verify
-        await asyncio.sleep(2)
+        await asyncio.sleep(3)
         commands = await tree.fetch_commands(guild=guild_obj)
         print(f"VÉGLEGES - Regisztrált parancsok: {[c.name for c in commands]}")
         print(f"VÉGLEGES - Összesen: {len(commands)}")
