@@ -76,6 +76,7 @@ async def on_ready():
         # Sync
         print(f'Szinkronizálás a szerverre: {guild_id}...')
         try:
+            await asyncio.sleep(5)  # Increased wait time
             synced = await tree.sync(guild=guild_obj)
             print(f'Sync returned: {[c.name for c in synced]} ({len(synced)} commands)')
         except Exception as e:
