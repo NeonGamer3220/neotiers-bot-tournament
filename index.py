@@ -230,30 +230,45 @@ async def tournamentround(interaction: discord.Interaction, action: str, tournam
                         view_channel=True, send_messages=True, read_message_history=True
                     )
                 }
-                try:
-                    channel = await guild.create_text_channel(channel_name, category=category, overwrites=overwrites)
-                except discord.Forbidden:
-                    await interaction.followup.send("A botnak nincs jogosultsága csatornák létrehozására ebben a kategóriában.", ephemeral=True)
-                    return
-                embed = discord.Embed(
-                    title=f"Tournament {round_number}. kör",
-                    description=f"{match['p1']['minecraft_name']} vs {match['p2']['minecraft_name']}\nSok sikert!",
-                    color=0x0000FF
-                )
-                view = discord.ui.View()
-                view.add_item(discord.ui.Button(label="Jegy lezárása", style=discord.ButtonStyle.danger,
-                    custom_id=f"close_ticket_{tournament_uuid}_{match['p1']['minecraft_name']}_{match['p2']['minecraft_name']}"))
-                view.add_item(discord.ui.Button(label="Eredmény beírása", style=discord.ButtonStyle.primary,
-                    custom_id=f"result_{tournament_uuid}_{match['p1']['minecraft_name']}_{match['p2']['minecraft_name']}"))
-                await channel.send(embed=embed, view=view)
-                try:
-                    supabase.table('matches').insert({
-                        'tournament_id': tournament_uuid, 'round': round_number,
-                        'player1': match['p1']['minecraft_name'], 'player2': match['p2']['minecraft_name'],
-                        'ticket_channel_id': channel.id
-                    }).execute()
-                except APIError as e:
-                    print(f"Nem sikerült beszúrni a mérkőzést: {e}")
+            try:
+                channel = await guild.create_text_channel(channel_name, category=category, overwrites=overwrites)
+                # Explicitly ensure player permissions after creation
+                for player_id in [match['p1']['discord_id'], match['p2']['discord_id']]:
+                    try:
+                        await channel.set_permissions(
+                            discord.Object(id=player_id),
+                            view_channel=True,
+                            send_messages=True,
+                            read_message_history=True
+                        )
+                    except Exception as e:
+                        print(f"Could not set permissions for player {player_id}: {e}")
+            except discord.Forbidden:
+                await interaction.followup.send("A botnak nincs jogosultsága csatornák létrehozására ebben a kategóriában.", ephemeral=True)
+                return
+            except Exception as e:
+                print(f"Hiba a csatorna létrehozésekor: {e}")
+                return
+            
+            embed = discord.Embed(
+                title=f"Tournament {round_number}. kör",
+                description=f"{match['p1']['minecraft_name']} vs {match['p2']['minecraft_name']}\nSok sikert!",
+                color=0x0000FF
+            )
+            view = discord.ui.View()
+            view.add_item(discord.ui.Button(label="Jegy lezárása", style=discord.ButtonStyle.danger,
+                custom_id=f"close_ticket_{tournament_uuid}_{match['p1']['minecraft_name']}_{match['p2']['minecraft_name']}"))
+            view.add_item(discord.ui.Button(label="Eredmény beírása", style=discord.ButtonStyle.primary,
+                custom_id=f"result_{tournament_uuid}_{match['p1']['minecraft_name']}_{match['p2']['minecraft_name']}"))
+            await channel.send(embed=embed, view=view)
+            try:
+                supabase.table('matches').insert({
+                    'tournament_id': tournament_uuid, 'round': round_number,
+                    'player1': match['p1']['minecraft_name'], 'player2': match['p2']['minecraft_name'],
+                    'ticket_channel_id': channel.id
+                }).execute()
+            except APIError as e:
+                print(f"Nem sikerült beszúrni a mérkőzést: {e}")
             
             supabase.table('tournaments').update({'current_round': round_number, 'status': 'active'}).eq('id', tournament_uuid).execute()
             await interaction.followup.send(f"{round_number}. kör indítva {len(matches)} mérkőzéssel.", ephemeral=True)
@@ -736,6 +751,17 @@ async def start_tournament(tournament_id):
                 
             try:
                 channel = await guild.create_text_channel(channel_name, category=category, overwrites=overwrites)
+                # Explicitly ensure player permissions after creation
+                for player_id in [match['p1']['discord_id'], match['p2']['discord_id']]:
+                    try:
+                        await channel.set_permissions(
+                            discord.Object(id=player_id),
+                            view_channel=True,
+                            send_messages=True,
+                            read_message_history=True
+                        )
+                    except Exception as e:
+                        print(f"Could not set permissions for player {player_id}: {e}")
             except discord.Forbidden:
                 print("Botnak nincs jogosultsága csatornák létrehozására a jegykategóriában")
                 return
@@ -903,6 +929,17 @@ async def start_round(tournament_id, round_num):
             
             try:
                 channel = await guild.create_text_channel(channel_name, category=category, overwrites=overwrites)
+                # Explicitly ensure player permissions after creation
+                for player_id in [match['p1']['discord_id'], match['p2']['discord_id']]:
+                    try:
+                        await channel.set_permissions(
+                            discord.Object(id=player_id),
+                            view_channel=True,
+                            send_messages=True,
+                            read_message_history=True
+                        )
+                    except Exception as e:
+                        print(f"Could not set permissions for player {player_id}: {e}")
             except discord.Forbidden:
                 print("Botnak nincs jogosultsága csatornák létrehozására a jegykategóriában")
                 return
