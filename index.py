@@ -600,23 +600,34 @@ class ScoreModal(discord.ui.Modal, title="Pontozás"):
             supabase.table('matches').update({'winner': self.winner, 'score': score}).eq('tournament_id', self.tournament_id).eq('player1', self.p1).eq('player2', self.p2).execute()
         except APIError as e:
             print(f"Nem sikerült frissíteni a mérkőzés eredményét: {e}")
-        results_channel = await client.fetch_channel(int(os.getenv('RESULTS_CHANNEL_ID')))
-        await results_channel.send(f"{self.p1} vs {self.p2}: {self.winner} nyert {score}-val")
         
-        match_response = supabase.table('matches').select('ticket_channel_id').eq('tournament_id', self.tournament_id).eq('player1', self.p1).eq('player2', self.p2).execute()
-        if match_response.data:
-            channel_id = match_response.data[0]['ticket_channel_id']
-            channel = await client.fetch_channel(channel_id)
-            if channel:
-                try:
+        # Try to send to results channel, but don't block if it fails
+        try:
+            results_channel = await client.fetch_channel(int(os.getenv('RESULTS_CHANNEL_ID')))
+            await results_channel.send(f"{self.p1} vs {self.p2}: {self.winner} nyert {score}-val")
+        except Exception as e:
+            print(f"Could not send to results channel: {e}")
+        
+        # Delete ticket channel if exists
+        try:
+            match_response = supabase.table('matches').select('ticket_channel_id').eq('tournament_id', self.tournament_id).eq('player1', self.p1).eq('player2', self.p2).execute()
+            if match_response.data:
+                channel_id = match_response.data[0]['ticket_channel_id']
+                channel = await client.fetch_channel(channel_id)
+                if channel:
                     await channel.delete()
                     print(f"Jegycsatorna törölve: {channel_id}")
-                except discord.Forbidden:
-                    print("Botnak nincs 'Csatornák kezelése' jogosultsága a jegy törléséhez")
-                except Exception as e:
-                    print(f"Hiba a csatorna törlésekor: {e}")
+        except discord.Forbidden:
+            print("Botnak nincs 'Csatornák kezelése' jogosultsága a jegy törléséhez")
+        except Exception as e:
+            print(f"Error deleting ticket channel: {e}")
         
-        await check_round_complete(self.tournament_id)
+        # Always check round completion regardless of above errors
+        try:
+            await check_round_complete(self.tournament_id)
+        except Exception as e:
+            print(f"Error in check_round_complete: {e}")
+        
         await interaction.followup.send("Eredmény elküldve.", ephemeral=True)
 
 
@@ -957,8 +968,11 @@ async def check_round_complete(tournament_id):
                     all_winner_names.append(p['minecraft_name'])
             
             if len(all_winner_names) == 1:
-                results_channel = await client.fetch_channel(int(os.getenv('RESULTS_CHANNEL_ID')))
-                await results_channel.send(f"Tournament győztes: {all_winner_names[0]}")
+                try:
+                    results_channel = await client.fetch_channel(int(os.getenv('RESULTS_CHANNEL_ID')))
+                    await results_channel.send(f"Tournament győztes: {all_winner_names[0]}")
+                except Exception as e:
+                    print(f"Could not send winner message: {e}")
                 supabase.table('tournaments').update({'status': 'finished'}).eq('id', tournament_id).execute()
                 return
             
@@ -967,6 +981,8 @@ async def check_round_complete(tournament_id):
                 linked_response = supabase.table('linked_accounts').select('discord_id').eq('minecraft_name', w).execute()
                 if linked_response.data:
                     winners_with_discord.append({'discord_id': linked_response.data[0]['discord_id'], 'minecraft_name': w})
+                else:
+                    print(f"Warning: Winner {w} has no linked Discord account")
             
             supabase.table('tournaments').update({'players': winners_with_discord, 'current_round': round_num + 1}).eq('id', tournament_id).execute()
             await asyncio.sleep(24 * 60 * 60)
@@ -975,6 +991,8 @@ async def check_round_complete(tournament_id):
             except Exception as e:
                 print(f"Error starting next round: {e}")
     except APIError as e:
-        print(f"Error in check_round_complete: {e}")
+        print(f"Error in check_round_complete (Supabase): {e}")
+    except Exception as e:
+        print(f"Unexpected error in check_round_complete: {e}")
 
 client.run(os.getenv('DISCORD_TOKEN'))
