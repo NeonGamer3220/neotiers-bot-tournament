@@ -941,17 +941,33 @@ async def check_round_complete(tournament_id):
         matches_response = supabase.table('matches').select('*').eq('tournament_id', tournament_id).eq('round', round_num).execute()
         all_done = all(m['winner'] for m in matches_response.data)
         if all_done:
-            winners = [m['winner'] for m in matches_response.data]
-            if len(winners) == 1:
+            players = tournament['players']  # list of {discord_id, minecraft_name}
+            winners_from_matches = [m['winner'] for m in matches_response.data]
+            
+            # Find bye player(s): players who didn't participate in any match this round
+            matched_players = set()
+            for m in matches_response.data:
+                matched_players.add(m['player1'])
+                matched_players.add(m['player2'])
+            
+            # Include players who are in tournament but not in any match (bye players)
+            all_winner_names = winners_from_matches[:]
+            for p in players:
+                if p['minecraft_name'] not in matched_players:
+                    all_winner_names.append(p['minecraft_name'])
+            
+            if len(all_winner_names) == 1:
                 results_channel = await client.fetch_channel(int(os.getenv('RESULTS_CHANNEL_ID')))
-                await results_channel.send(f"Tournament győztes: {winners[0]}")
+                await results_channel.send(f"Tournament győztes: {all_winner_names[0]}")
                 supabase.table('tournaments').update({'status': 'finished'}).eq('id', tournament_id).execute()
                 return
+            
             winners_with_discord = []
-            for w in winners:
+            for w in all_winner_names:
                 linked_response = supabase.table('linked_accounts').select('discord_id').eq('minecraft_name', w).execute()
                 if linked_response.data:
                     winners_with_discord.append({'discord_id': linked_response.data[0]['discord_id'], 'minecraft_name': w})
+            
             supabase.table('tournaments').update({'players': winners_with_discord, 'current_round': round_num + 1}).eq('id', tournament_id).execute()
             await asyncio.sleep(24 * 60 * 60)
             try:
