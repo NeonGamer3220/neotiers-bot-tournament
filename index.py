@@ -30,6 +30,9 @@ async def on_ready():
         print(f'Bot is in guilds: {guilds}')
         sys.stdout.flush()
         
+        # Wait for Discord to fully recognize the bot
+        await asyncio.sleep(3)
+        
         guild_id_env = os.getenv('GUILD_ID')
         print(f'GUILD_ID from env: {guild_id_env}')
         sys.stdout.flush()
