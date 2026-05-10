@@ -10,7 +10,7 @@ GUILD_ID = int(os.getenv('GUILD_ID'))
 DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')
 
 # Import bot from index.py (with commands already defined)
-from index import bot
+from index import client as bot
 
 async def deploy_commands():
     """Deploy slash commands to Discord."""
