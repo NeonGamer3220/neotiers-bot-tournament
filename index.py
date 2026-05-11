@@ -230,25 +230,25 @@ async def tournamentround(interaction: discord.Interaction, action: str, tournam
                         view_channel=True, send_messages=True, read_message_history=True
                     )
                 }
-            try:
-                channel = await guild.create_text_channel(channel_name, category=category, overwrites=overwrites)
-                # Explicitly ensure player permissions after creation
-                for player_id in [match['p1']['discord_id'], match['p2']['discord_id']]:
-                    try:
-                        await channel.set_permissions(
-                            discord.Object(id=player_id),
-                            view_channel=True,
-                            send_messages=True,
-                            read_message_history=True
-                        )
-                    except Exception as e:
-                        print(f"Could not set permissions for player {player_id}: {e}")
-            except discord.Forbidden:
-                await interaction.followup.send("A botnak nincs jogosultsága csatornák létrehozására ebben a kategóriában.", ephemeral=True)
-                continue
-            except Exception as e:
-                print(f"Hiba a csatorna létrehozésekor: {e}")
-                continue
+                try:
+                    channel = await guild.create_text_channel(channel_name, category=category, overwrites=overwrites)
+                    # Explicitly ensure player permissions after creation
+                    for player_id in [match['p1']['discord_id'], match['p2']['discord_id']]:
+                        try:
+                            await channel.set_permissions(
+                                discord.Object(id=player_id),
+                                view_channel=True,
+                                send_messages=True,
+                                read_message_history=True
+                            )
+                        except Exception as e:
+                            print(f"Could not set permissions for player {player_id}: {e}")
+                except discord.Forbidden:
+                    await interaction.followup.send("A botnak nincs jogosultsága csatornák létrehozására ebben a kategóriában.", ephemeral=True)
+                    continue
+                except Exception as e:
+                    print(f"Hiba a csatorna létrehozésekor: {e}")
+                    continue
             
             embed = discord.Embed(
                 title=f"Tournament {round_number}. kör",
