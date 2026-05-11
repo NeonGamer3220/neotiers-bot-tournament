@@ -213,8 +213,8 @@ async def tournamentround(interaction: discord.Interaction, action: str, tournam
             category = guild.get_channel(category_id)
             if not category or not isinstance(category, discord.CategoryChannel):
                 await interaction.followup.send(f"Érvénytelen jegykategória: {category_id}", ephemeral=True)
-                return
-            
+                 return
+             
              for match in matches:
                 channel_name = f"t-r{round_number}-{match['p1']['minecraft_name']}-{match['p2']['minecraft_name']}"
                 overwrites = {
