@@ -215,7 +215,7 @@ async def tournamentround(interaction: discord.Interaction, action: str, tournam
                 await interaction.followup.send(f"Érvénytelen jegykategória: {category_id}", ephemeral=True)
                 return
             
-            for match in matches:
+             for match in matches:
                 channel_name = f"t-r{round_number}-{match['p1']['minecraft_name']}-{match['p2']['minecraft_name']}"
                 overwrites = {
                     guild.default_role: discord.PermissionOverwrite(view_channel=False, send_messages=False),
@@ -245,39 +245,12 @@ async def tournamentround(interaction: discord.Interaction, action: str, tournam
                         print(f"Could not set permissions for player {player_id}: {e}")
             except discord.Forbidden:
                 await interaction.followup.send("A botnak nincs jogosultsága csatornák létrehozására ebben a kategóriában.", ephemeral=True)
-                return
+                # Continue with other matches instead of returning
+                continue
             except Exception as e:
                 print(f"Hiba a csatorna létrehozésekor: {e}")
-                return
-            
-            embed = discord.Embed(
-                title=f"Tournament {round_number}. kör",
-                description=f"{match['p1']['minecraft_name']} vs {match['p2']['minecraft_name']}\nSok sikert!",
-                color=0x0000FF
-            )
-            view = discord.ui.View()
-            view.add_item(discord.ui.Button(label="Jegy lezárása", style=discord.ButtonStyle.danger,
-                custom_id=f"close_ticket_{tournament_uuid}_{match['p1']['minecraft_name']}_{match['p2']['minecraft_name']}"))
-            view.add_item(discord.ui.Button(label="Eredmény beírása", style=discord.ButtonStyle.primary,
-                custom_id=f"result_{tournament_uuid}_{match['p1']['minecraft_name']}_{match['p2']['minecraft_name']}"))
-            await channel.send(embed=embed, view=view)
-            try:
-                supabase.table('matches').insert({
-                    'tournament_id': tournament_uuid, 'round': round_number,
-                    'player1': match['p1']['minecraft_name'], 'player2': match['p2']['minecraft_name'],
-                    'ticket_channel_id': channel.id
-                }).execute()
-            except APIError as e:
-                print(f"Nem sikerült beszúrni a mérkőzést: {e}")
-            
-            supabase.table('tournaments').update({'current_round': round_number, 'status': 'active'}).eq('id', tournament_uuid).execute()
-            await interaction.followup.send(f"{round_number}. kör indítva {len(matches)} mérkőzéssel.", ephemeral=True)
-        
-        elif action.lower() == 'stop':
-            matches_response = supabase.table('matches').select('*').eq('tournament_id', tournament_uuid).eq('round', round_number).execute()
-            if not matches_response.data:
-                await interaction.followup.send("Nincsenek mérkőzések ebben a körben.", ephemeral=True)
-                return
+                # Continue with other matches instead of returning
+                continue
             
             deleted_channels = 0
             for match in matches_response.data:
@@ -760,15 +733,17 @@ async def start_tournament(tournament_id):
                             send_messages=True,
                             read_message_history=True
                         )
-                    except Exception as e:
-                        print(f"Could not set permissions for player {player_id}: {e}")
+                     except Exception as e:
+                         print(f"Could not set permissions for player {player_id}: {e}")
             except discord.Forbidden:
                 print("Botnak nincs jogosultsága csatornák létrehozására a jegykategóriában")
-                return
+                # Continue with other matches instead of returning
+                continue
             except Exception as e:
                 print(f"Hiba a csatorna létrehozésekor: {e}")
-                return
-            
+                # Continue with other matches instead of returning
+                continue
+
             embed = discord.Embed(title="Tournament 1. kör", description=f"{match['p1']['minecraft_name']} vs {match['p2']['minecraft_name']}\nSok sikert!", color=0x0000FF)
             close_button = discord.ui.Button(label="Jegy lezárása", style=discord.ButtonStyle.danger, custom_id=f"close_ticket_{tournament_id}_{match['p1']['minecraft_name']}_{match['p2']['minecraft_name']}")
             result_button = discord.ui.Button(label="Eredmény beírása", style=discord.ButtonStyle.primary, custom_id=f"result_{tournament_id}_{match['p1']['minecraft_name']}_{match['p2']['minecraft_name']}")
@@ -779,8 +754,9 @@ async def start_tournament(tournament_id):
                 await channel.send(embed=embed, view=view)
             except Exception as e:
                 print(f"Nem sikerült elküldeni az embedet a csatornában: {e}")
-                return
-            
+                # Continue with other matches instead of returning
+                continue
+
             try:
                 supabase.table('matches').insert({
                     'tournament_id': tournament_id,
@@ -942,11 +918,13 @@ async def start_round(tournament_id, round_num):
                         print(f"Could not set permissions for player {player_id}: {e}")
             except discord.Forbidden:
                 print("Botnak nincs jogosultsága csatornák létrehozására a jegykategóriában")
-                return
+                # Continue with other matches instead of returning
+                continue
             except Exception as e:
                 print(f"Hiba a csatorna létrehozésekor: {e}")
-                return
-            
+                # Continue with other matches instead of returning
+                continue
+
             embed = discord.Embed(title=f"Tournament {round_num}. kör", description=f"{match['p1']['minecraft_name']} vs {match['p2']['minecraft_name']}\nSok sikert!", color=0x0000FF)
             close_button = discord.ui.Button(label="Jegy lezárása", style=discord.ButtonStyle.danger, custom_id=f"close_ticket_{tournament_id}_{match['p1']['minecraft_name']}_{match['p2']['minecraft_name']}")
             result_button = discord.ui.Button(label="eredmény beírása", style=discord.ButtonStyle.primary, custom_id=f"result_{tournament_id}_{match['p1']['minecraft_name']}_{match['p2']['minecraft_name']}")
@@ -957,8 +935,9 @@ async def start_round(tournament_id, round_num):
                 await channel.send(embed=embed, view=view)
             except Exception as e:
                 print(f"Nem sikerült elküldeni az embedet a csatornában: {e}")
-                return
-            
+                # Continue with other matches instead of returning
+                continue
+
             try:
                 supabase.table('matches').insert({
                     'tournament_id': tournament_id,
