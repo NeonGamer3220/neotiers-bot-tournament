@@ -15,6 +15,13 @@ from views import MatchTicketView, TournamentQueueView
 log = logging.getLogger("neontiers.tournaments")
 
 
+def _to_int(val) -> int:
+    try:
+        return int(val) if val is not None else 0
+    except (ValueError, TypeError):
+        return 0
+
+
 class TournamentsCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
@@ -34,23 +41,33 @@ class TournamentsCog(commands.Cog):
             log.error("Hiba az auto_start_loop futása közben: %s", exc)
 
     async def _get_prev_round_winners(self, tournament_id: str, round_num: int) -> list[dict]:
-        """Lekéri az előző forduló győzteseinek adatait (Discord ID + Minecraft Név)."""
+        """Lekéri az előző forduló győzteseinek adatait."""
         def _fetch():
             resp = db._client.table("matches").select("*").eq("tournament_id", tournament_id).eq("round_number", round_num - 1).execute()
             if not resp or not resp.data:
                 return []
             
+            # Lekérjük a bajnokság eredeti regisztrált játékoslistáját is biztonsági tartalékként
+            reg_players = db.get_tournament_players(tournament_id)
+            player_map = {_to_int(p["discord_id"]): p.get("minecraft_name") for p in reg_players if p.get("discord_id")}
+
             winners = []
             for match in resp.data:
-                w_id = match.get("winner_discord_id")
+                w_id = _to_int(match.get("winner_discord_id"))
                 if not w_id:
                     continue
-                # Meghatározzuk, melyik MC név tartozott a győzteshez
-                if w_id == match.get("player1_discord_id"):
-                    mc_name = match.get("player1_mc") or "Ismeretlen"
-                else:
-                    mc_name = match.get("player2_mc") or "Ismeretlen"
                 
+                # Meghatározzuk a Minecraft nevet
+                p1_id = _to_int(match.get("player1_discord_id"))
+                if w_id == p1_id:
+                    mc_name = match.get("player1_mc")
+                else:
+                    mc_name = match.get("player2_mc")
+                
+                # Ha üres vagy Ismeretlen, megnézzük a regisztrációs listában
+                if not mc_name or mc_name == "Ismeretlen":
+                    mc_name = player_map.get(w_id, "")
+
                 winners.append({"discord_id": w_id, "minecraft_name": mc_name})
             return winners
 
@@ -59,32 +76,32 @@ class TournamentsCog(commands.Cog):
     async def _start_round_logic(self, tourney: dict, round_num: int = 1) -> str:
         tourney_id = tourney["id"]
         
-        # 1. forduló esetén a regisztrált játékosokat kérjük le (Discord ID + MC név)
         if round_num == 1:
-            players = await arun(db.get_tournament_players, tourney_id)
+            raw_players = await arun(db.get_tournament_players, tourney_id)
+            players = []
+            for p in raw_players:
+                d_id = _to_int(p.get("discord_id"))
+                if d_id > 0:
+                    players.append({"discord_id": d_id, "minecraft_name": p.get("minecraft_name", "")})
         else:
-            # Ellenőrizzük, hogy vannak-e még lezáratlan meccsek az előző fordulóból
             unresolved = await arun(db.get_unresolved_matches, tourney_id)
             if unresolved:
                 return f"⚠️ Még {len(unresolved)} meccs nincs lezárva ebben a fordulóban! Előbb rögzítsétek az eredményeket."
             
             players = await self._get_prev_round_winners(tourney_id, round_num)
 
-        # Szűrjük az érvénytelen játékosokat (ahol hiányzik a Discord ID)
-        valid_players = [p for p in players if p.get("discord_id")]
-
-        if len(valid_players) < 2:
+        if len(players) < 2:
             if round_num == 1:
                 await arun(db.update_tournament, tourney_id, status="cancelled")
                 return "❌ A bajnokság törölve lett, mert nincs elég regisztrált játékos (min. 2 fő)."
             else:
                 await arun(db.update_tournament, tourney_id, status="completed")
-                if len(valid_players) == 1:
-                    winner = valid_players[0]
-                    return f"🏆 A bajnokság véget ért! A győztes: <@{winner['discord_id']}> ({winner['minecraft_name']})!"
+                if len(players) == 1:
+                    w = players[0]
+                    return f"🏆 A bajnokság véget ért! A győztes: <@{w['discord_id']}> ({w['minecraft_name'] or 'Győztes'})!"
                 return "❌ Nincs elég győztes a következő forduló elindításához."
 
-        shuffled = valid_players.copy()
+        shuffled = players.copy()
         random.shuffle(shuffled)
 
         await arun(db.update_tournament, tourney_id, status="running", current_round=round_num)
@@ -98,11 +115,15 @@ class TournamentsCog(commands.Cog):
             p1 = shuffled[i]
             p2 = shuffled[i + 1]
 
-            p1_id = p1["discord_id"]
-            p2_id = p2["discord_id"]
+            p1_id = _to_int(p1["discord_id"])
+            p2_id = _to_int(p2["discord_id"])
 
-            p1_mc = p1.get("minecraft_name") or f"Player_{p1_id}"
-            p2_mc = p2.get("minecraft_name") or f"Player_{p2_id}"
+            # Discord tag név lekérése ha a Minecraft név üres lenne
+            u1 = guild.get_member(p1_id) if guild else None
+            u2 = guild.get_member(p2_id) if guild else None
+
+            p1_mc = p1.get("minecraft_name") or (u1.display_name if u1 else f"Player_{p1_id}")
+            p2_mc = p2.get("minecraft_name") or (u2.display_name if u2 else f"Player_{p2_id}")
 
             ticket_channel = None
             if guild and isinstance(category, discord.CategoryChannel):
@@ -112,13 +133,15 @@ class TournamentsCog(commands.Cog):
                             guild.default_role: discord.PermissionOverwrite(read_messages=False),
                             guild.me: discord.PermissionOverwrite(read_messages=True, send_messages=True),
                         }
-                        u1 = guild.get_member(p1_id)
-                        u2 = guild.get_member(p2_id)
                         if u1: overwrites[u1] = discord.PermissionOverwrite(read_messages=True, send_messages=True)
                         if u2: overwrites[u2] = discord.PermissionOverwrite(read_messages=True, send_messages=True)
 
+                        # Tisztított csatornanév (csak érvényes karakterek)
+                        clean_p1 = "".join(c for c in p1_mc if c.isalnum() or c in "-_")
+                        clean_p2 = "".join(c for c in p2_mc if c.isalnum() or c in "-_")
+                        
                         ticket_channel = await category.create_text_channel(
-                            name=f"r{round_num}-{p1_mc}-vs-{p2_mc}",
+                            name=f"r{round_num}-{clean_p1[:10]}-vs-{clean_p2[:10]}",
                             overwrites=overwrites
                         )
                     except discord.HTTPException as exc:
