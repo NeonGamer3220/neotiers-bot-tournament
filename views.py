@@ -6,6 +6,7 @@ import logging
 import discord
 from discord import ui
 
+from config import config
 from database import arun, db
 from utils import generate_link_code
 
@@ -33,7 +34,6 @@ class ResultModal(ui.Modal, title="Meccs Eredmény Beírása"):
         await interaction.response.defer(ephemeral=True)
         winner_raw = self.winner_input.value.strip()
 
-        # Győztes azonosítása (MC név vagy ID alapján)
         p1_id = self.match_data.get("player1_discord_id")
         p2_id = self.match_data.get("player2_discord_id")
         p1_mc = (self.match_data.get("player1_mc") or "").lower()
@@ -54,11 +54,9 @@ class ResultModal(ui.Modal, title="Meccs Eredmény Beírása"):
             )
             return
 
-        # Győztes rögzítése adatbázisban
         await arun(db.set_match_winner, self.match_data["id"], winner_id)
 
-        # Eredmény kihirdetése az Eredmények csatornában
-        results_channel_id = self.tournament_data.get("results_channel_id")
+        results_channel_id = self.tournament_data.get("results_channel_id") or config.results_channel_id
         if results_channel_id and interaction.guild:
             ch = interaction.guild.get_channel(results_channel_id)
             if isinstance(ch, discord.TextChannel):
@@ -105,11 +103,10 @@ class TournamentQueueView(ui.View):
         await interaction.response.defer(ephemeral=True)
         user_id = interaction.user.id
 
-        # Ellenőrizzük, hogy a fiók össze van-e kötve Minecraft névvel
         linked = await arun(db.get_linked_account, user_id)
         if not linked:
             code = generate_link_code()
-            await arun(db.create_pending_code, user_id, code)
+            await arun(db.create_pending_code, user_id, code, config.pending_code_ttl_minutes)
             await interaction.followup.send(
                 f"❌ A fiókod nincs összekapcsolva!\n\n"
                 f"Lépj fel a Minecraft szerverre (`chaosffa.kinetic.host`), és írd be ezt a parancsot:\n"
@@ -118,8 +115,8 @@ class TournamentQueueView(ui.View):
             )
             return
 
-        # Regisztráció a bajnokságra
-        added = await arun(db.add_player_to_tournament, self.tournament_id, user_id)
+        mc_name = linked.get("minecraft_name", "Ismeretlen")
+        added = await arun(db.add_player_to_tournament, self.tournament_id, user_id, mc_name)
         if added:
             await interaction.followup.send("✅ Sikeresen regisztráltál a bajnokságra!", ephemeral=True)
         else:
