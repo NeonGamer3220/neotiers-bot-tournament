@@ -40,6 +40,18 @@ class TournamentsCog(commands.Cog):
         except Exception as exc:
             log.error("Hiba az auto_start_loop futása közben: %s", exc)
 
+    async def _get_member_safe(self, guild: discord.Guild, user_id: int) -> discord.Member | None:
+        """Biztonságosan lekéri a Guild Tagot megbízhatóan (cache-ből vagy API-ból)."""
+        if not guild or not user_id:
+            return None
+        member = guild.get_member(user_id)
+        if not member:
+            try:
+                member = await guild.fetch_member(user_id)
+            except discord.HTTPException:
+                member = None
+        return member
+
     async def _get_prev_round_winners(self, tournament_id: str, round_num: int) -> list[dict]:
         """Lekéri az előző forduló győzteseinek adatait."""
         def _fetch():
@@ -47,7 +59,6 @@ class TournamentsCog(commands.Cog):
             if not resp or not resp.data:
                 return []
             
-            # Lekérjük a bajnokság eredeti regisztrált játékoslistáját is biztonsági tartalékként
             reg_players = db.get_tournament_players(tournament_id)
             player_map = {_to_int(p["discord_id"]): p.get("minecraft_name") for p in reg_players if p.get("discord_id")}
 
@@ -57,14 +68,12 @@ class TournamentsCog(commands.Cog):
                 if not w_id:
                     continue
                 
-                # Meghatározzuk a Minecraft nevet
                 p1_id = _to_int(match.get("player1_discord_id"))
                 if w_id == p1_id:
                     mc_name = match.get("player1_mc")
                 else:
                     mc_name = match.get("player2_mc")
                 
-                # Ha üres vagy Ismeretlen, megnézzük a regisztrációs listában
                 if not mc_name or mc_name == "Ismeretlen":
                     mc_name = player_map.get(w_id, "")
 
@@ -118,9 +127,9 @@ class TournamentsCog(commands.Cog):
             p1_id = _to_int(p1["discord_id"])
             p2_id = _to_int(p2["discord_id"])
 
-            # Discord tag név lekérése ha a Minecraft név üres lenne
-            u1 = guild.get_member(p1_id) if guild else None
-            u2 = guild.get_member(p2_id) if guild else None
+            # Lekérjük a tagokat az API-ból/Cache-ből
+            u1 = await self._get_member_safe(guild, p1_id)
+            u2 = await self._get_member_safe(guild, p2_id)
 
             p1_mc = p1.get("minecraft_name") or (u1.display_name if u1 else f"Player_{p1_id}")
             p2_mc = p2.get("minecraft_name") or (u2.display_name if u2 else f"Player_{p2_id}")
@@ -129,14 +138,18 @@ class TournamentsCog(commands.Cog):
             if guild and isinstance(category, discord.CategoryChannel):
                 if len(category.channels) < 50:
                     try:
+                        # Alapvető láthatóság tiltása mindenkinek, csak a bot és a 2 játékos láthatja
                         overwrites = {
-                            guild.default_role: discord.PermissionOverwrite(read_messages=False),
-                            guild.me: discord.PermissionOverwrite(read_messages=True, send_messages=True),
+                            guild.default_role: discord.PermissionOverwrite(read_messages=False, send_messages=False),
+                            guild.me: discord.PermissionOverwrite(read_messages=True, send_messages=True, manage_channels=True),
                         }
-                        if u1: overwrites[u1] = discord.PermissionOverwrite(read_messages=True, send_messages=True)
-                        if u2: overwrites[u2] = discord.PermissionOverwrite(read_messages=True, send_messages=True)
+                        
+                        # Hozzáadjuk a 2 ellenfelet a csatornához!
+                        if u1:
+                            overwrites[u1] = discord.PermissionOverwrite(read_messages=True, send_messages=True)
+                        if u2:
+                            overwrites[u2] = discord.PermissionOverwrite(read_messages=True, send_messages=True)
 
-                        # Tisztított csatornanév (csak érvényes karakterek)
                         clean_p1 = "".join(c for c in p1_mc if c.isalnum() or c in "-_")
                         clean_p2 = "".join(c for c in p2_mc if c.isalnum() or c in "-_")
                         
@@ -166,8 +179,9 @@ class TournamentsCog(commands.Cog):
                     description="Készüljetek fel a küzdelemre! Az eredményt a lenti gombbal rögzíthetitek.",
                     color=discord.Color.gold(),
                 )
+                # Meghívjuk őket a csatornába egy pingszóval
                 await ticket_channel.send(
-                    content=f"<@{p1_id}> vs <@{p2_id}>",
+                    content=f"🔔 <@{p1_id}> vs <@{p2_id}>",
                     embed=embed,
                     view=MatchTicketView(match_data, tourney)
                 )
