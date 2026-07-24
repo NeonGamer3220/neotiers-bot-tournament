@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import random
+from datetime import datetime, timezone, timedelta
 import discord
 from discord import app_commands
 from discord.ext import commands, tasks
@@ -26,9 +27,15 @@ class TournamentsCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.auto_start_loop.start()
+        self.auto_close_inactive_loop.start()
 
     def cog_unload(self):
         self.auto_start_loop.cancel()
+        self.auto_close_inactive_loop.cancel()
+
+    # ==========================================
+    # HÁTTÉRFELADATOK (LOOPS)
+    # ==========================================
 
     @tasks.loop(seconds=config.auto_start_poll_seconds)
     async def auto_start_loop(self):
@@ -40,8 +47,60 @@ class TournamentsCog(commands.Cog):
         except Exception as exc:
             log.error("Hiba az auto_start_loop futása közben: %s", exc)
 
+    @tasks.loop(minutes=15)
+    async def auto_close_inactive_loop(self):
+        """Háttérfeladat: 24 órája inaktív meccsek automatikus 0-0 FF lezárása."""
+        try:
+            # Lekérjük az összes nyitott meccset
+            running_tourneys = await arun(
+                lambda: db._client.table("tournaments").select("id").eq("status", "running").execute().data or []
+            )
+            for t in running_tourneys:
+                unresolved = await arun(db.get_unresolved_matches, t["id"])
+                for match in unresolved:
+                    ticket_id = _to_int(match.get("ticket_channel_id"))
+                    if not ticket_id:
+                        continue
+                    
+                    channel = self.bot.get_channel(ticket_id)
+                    if isinstance(channel, discord.TextChannel):
+                        # Megkeressük az utolsó emberi üzenetet
+                        last_human_msg = None
+                        async for msg in channel.history(limit=50):
+                            if not msg.author.bot:
+                                last_human_msg = msg
+                                break
+                        
+                        now = datetime.now(timezone.utc)
+                        cutoff = now - timedelta(hours=24)
+                        
+                        # Ha nincs emberi üzenet, a csatorna létrehozási idejét vesszük alapul
+                        ref_time = last_human_msg.created_at if last_human_msg else channel.created_at
+                        
+                        if ref_time < cutoff:
+                            log.info("Meccs inaktivitás miatt lezárva (24h+): match_id=%s", match["id"])
+                            embed = discord.Embed(
+                                title="⏰ Automatikus Lezárás (Inaktivitás)",
+                                description="Mivel 24 órája nem érkezett emberi üzenet a csatornában, a meccs **0 - 0** eredménnyel zárult, és mindkét játékos **FF (Forfeit)** státuszt kapott.",
+                                color=discord.Color.red()
+                            )
+                            await channel.send(embed=embed)
+                            # Rögzítjük az adatbázisban a döntetlent/dupla FF-et (winner = 0)
+                            await arun(db.set_match_winner, match["id"], 0)
+                            await asyncio.sleep(5)
+                            try:
+                                await channel.delete(reason="24 órás inaktivitás miatti automatikus törlés")
+                            except discord.HTTPException:
+                                pass
+        except Exception as exc:
+            log.error("Hiba az auto_close_inactive_loop futása közben: %s", exc)
+
+    # ==========================================
+    # SEGGÉDFÜGGVÉNYEK
+    # ==========================================
+
     async def _get_member_safe(self, guild: discord.Guild, user_id: int) -> discord.Member | None:
-        """Biztonságosan lekéri a Guild Tagot megbízhatóan (cache-ből vagy API-ból)."""
+        """Biztonságos tag lekérés (Cache / Discord API fallback)."""
         if not guild or not user_id:
             return None
         member = guild.get_member(user_id)
@@ -52,6 +111,13 @@ class TournamentsCog(commands.Cog):
                 member = None
         return member
 
+    async def _get_player_info(self, discord_id: int) -> tuple[int, str]:
+        """Közvetlenül a linked_accounts táblából kérdezi le a játékos adatait."""
+        linked = await arun(db.get_linked_account, discord_id)
+        if linked and linked.get("minecraft_name"):
+            return discord_id, linked["minecraft_name"]
+        return discord_id, f"Player_{discord_id}"
+
     async def _get_prev_round_winners(self, tournament_id: str, round_num: int) -> list[dict]:
         """Lekéri az előző forduló győzteseinek adatait."""
         def _fetch():
@@ -59,24 +125,15 @@ class TournamentsCog(commands.Cog):
             if not resp or not resp.data:
                 return []
             
-            reg_players = db.get_tournament_players(tournament_id)
-            player_map = {_to_int(p["discord_id"]): p.get("minecraft_name") for p in reg_players if p.get("discord_id")}
-
             winners = []
             for match in resp.data:
                 w_id = _to_int(match.get("winner_discord_id"))
-                if not w_id:
+                if not w_id or w_id == 0:
                     continue
                 
                 p1_id = _to_int(match.get("player1_discord_id"))
-                if w_id == p1_id:
-                    mc_name = match.get("player1_mc")
-                else:
-                    mc_name = match.get("player2_mc")
+                mc_name = match.get("player1_mc") if w_id == p1_id else match.get("player2_mc")
                 
-                if not mc_name or mc_name == "Ismeretlen":
-                    mc_name = player_map.get(w_id, "")
-
                 winners.append({"discord_id": w_id, "minecraft_name": mc_name})
             return winners
 
@@ -84,6 +141,7 @@ class TournamentsCog(commands.Cog):
 
     async def _start_round_logic(self, tourney: dict, round_num: int = 1) -> str:
         tourney_id = tourney["id"]
+        tourney_name = tourney.get("name", "Bajnokság")
         
         if round_num == 1:
             raw_players = await arun(db.get_tournament_players, tourney_id)
@@ -91,7 +149,8 @@ class TournamentsCog(commands.Cog):
             for p in raw_players:
                 d_id = _to_int(p.get("discord_id"))
                 if d_id > 0:
-                    players.append({"discord_id": d_id, "minecraft_name": p.get("minecraft_name", "")})
+                    _, mc_name = await self._get_player_info(d_id)
+                    players.append({"discord_id": d_id, "minecraft_name": mc_name})
         else:
             unresolved = await arun(db.get_unresolved_matches, tourney_id)
             if unresolved:
@@ -107,7 +166,7 @@ class TournamentsCog(commands.Cog):
                 await arun(db.update_tournament, tourney_id, status="completed")
                 if len(players) == 1:
                     w = players[0]
-                    return f"🏆 A bajnokság véget ért! A győztes: <@{w['discord_id']}> ({w['minecraft_name'] or 'Győztes'})!"
+                    return f"🏆 A bajnokság véget ért! A győztes: <@{w['discord_id']}> (`{w['minecraft_name']}`)!"
                 return "❌ Nincs elég győztes a következő forduló elindításához."
 
         shuffled = players.copy()
@@ -127,7 +186,6 @@ class TournamentsCog(commands.Cog):
             p1_id = _to_int(p1["discord_id"])
             p2_id = _to_int(p2["discord_id"])
 
-            # Lekérjük a tagokat az API-ból/Cache-ből
             u1 = await self._get_member_safe(guild, p1_id)
             u2 = await self._get_member_safe(guild, p2_id)
 
@@ -138,13 +196,11 @@ class TournamentsCog(commands.Cog):
             if guild and isinstance(category, discord.CategoryChannel):
                 if len(category.channels) < 50:
                     try:
-                        # Alapvető láthatóság tiltása mindenkinek, csak a bot és a 2 játékos láthatja
                         overwrites = {
                             guild.default_role: discord.PermissionOverwrite(read_messages=False, send_messages=False),
                             guild.me: discord.PermissionOverwrite(read_messages=True, send_messages=True, manage_channels=True),
                         }
                         
-                        # Hozzáadjuk a 2 ellenfelet a csatornához!
                         if u1:
                             overwrites[u1] = discord.PermissionOverwrite(read_messages=True, send_messages=True)
                         if u2:
@@ -154,7 +210,7 @@ class TournamentsCog(commands.Cog):
                         clean_p2 = "".join(c for c in p2_mc if c.isalnum() or c in "-_")
                         
                         ticket_channel = await category.create_text_channel(
-                            name=f"r{round_num}-{clean_p1[:10]}-vs-{clean_p2[:10]}",
+                            name=f"r{round_num}-{clean_p1[:8]}-vs-{clean_p2[:8]}",
                             overwrites=overwrites
                         )
                     except discord.HTTPException as exc:
@@ -174,14 +230,35 @@ class TournamentsCog(commands.Cog):
             created_matches += 1
 
             if ticket_channel:
+                # ==========================================
+                # EXACT CUSTOM EMBED & TEXT FORMATTING
+                # ==========================================
+                content_text = f"<@{p1_id}> <@{p2_id}> elindult a meccsetek. Pingeljétek egymást is, hogy minél gyorsabban le tudjátok játszani."
+
                 embed = discord.Embed(
-                    title=f"⚔️ {round_num}. Forduló: {p1_mc} vs {p2_mc}",
-                    description="Készüljetek fel a küzdelemre! Az eredményt a lenti gombbal rögzíthetitek.",
-                    color=discord.Color.gold(),
+                    title=f"{tourney_name} - {round_num}. kör",
+                    description=(
+                        "Regulator használhatja az Eredmény, FF és Bezárás gombokat.\n"
+                        "Az FF modalban 0 = ff, 1 = nem ff.\n"
+                        "Ha 24 óráig nincs emberi üzenet a csatornában, a meccs automatikusan 0-0 és mindkét játékos ff lesz."
+                    ),
+                    color=discord.Color.gold()
                 )
-                # Meghívjuk őket a csatornába egy pingszóval
+
+                embed.add_field(
+                    name="Párosítás",
+                    value=f"<@{p1_id}> vs <@{p2_id}>",
+                    inline=False
+                )
+
+                embed.add_field(
+                    name="In-game nevek",
+                    value=f"`{p1_mc}` vs `{p2_mc}`",
+                    inline=False
+                )
+
                 await ticket_channel.send(
-                    content=f"🔔 <@{p1_id}> vs <@{p2_id}>",
+                    content=content_text,
                     embed=embed,
                     view=MatchTicketView(match_data, tourney)
                 )
@@ -212,8 +289,12 @@ class TournamentsCog(commands.Cog):
 
             view = TournamentQueueView(tourney_id)
             embed = discord.Embed(
-                title=f"🏆 Bajnokság: {name}",
-                description=f"Kattints a **✅ Belépés** gombra a regisztrációhoz!\n\n**Jelentkezési határidő:** <t:{int(end_time.timestamp())}:R>",
+                title=f"🏆 Bajnokság Regisztráció: {name}",
+                description=(
+                    f"Kattints a **✅ Belépés** gombra a jelentkezéshez!\n"
+                    f"⚠️ *Kizárólag összekapcsolt Minecraft fiókkal tudsz jelentkezni!*\n\n"
+                    f"**Jelentkezési határidő:** <t:{int(end_time.timestamp())}:R>"
+                ),
                 color=discord.Color.blue(),
             )
             msg = await interaction.followup.send(embed=embed, view=view)
