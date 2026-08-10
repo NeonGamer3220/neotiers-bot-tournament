@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import random
 from datetime import datetime, timezone, timedelta
@@ -11,9 +12,12 @@ from discord.ext import commands, tasks
 
 from config import config
 from database import arun, db
+from embeds import build_queue_embed, build_ticket_embed
 from views import MatchTicketView, TournamentQueueView
 
 log = logging.getLogger("neontiers.tournaments")
+
+MATCH_DEADLINE_HOURS = 24
 
 
 def _to_int(val) -> int:
@@ -26,12 +30,70 @@ def _to_int(val) -> int:
 class TournamentsCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
+        # per-tournament lock so two rounds can't be auto-started concurrently
+        self._round_locks: dict[str, asyncio.Lock] = {}
         self.auto_start_loop.start()
         self.auto_close_inactive_loop.start()
 
     def cog_unload(self):
         self.auto_start_loop.cancel()
         self.auto_close_inactive_loop.cancel()
+
+    def _lock_for(self, tournament_id: str) -> asyncio.Lock:
+        lock = self._round_locks.get(tournament_id)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._round_locks[tournament_id] = lock
+        return lock
+
+    # ==========================================
+    # ÚJRAINDÍTÁS UTÁNI ÁLLAPOT VISSZAÁLLÍTÁS
+    # ==========================================
+
+    async def rehydrate_views(self) -> None:
+        """Minden aktív (queued/running) bajnoksághoz és nyitott meccshez
+        újraregisztrálja a perzisztens view-kat, hogy bot-restart után is
+        működjenek a gombok."""
+        try:
+            tournaments = await arun(db.list_active_tournaments)
+        except Exception as exc:
+            log.error("Nem sikerült lekérni az aktív bajnokságokat rehydration közben: %s", exc)
+            tournaments = []
+
+        for t in tournaments:
+            queue_message_id = _to_int(t.get("queue_message_id"))
+            if not queue_message_id:
+                continue
+            view = TournamentQueueView(t["id"])
+            self.bot.add_view(view, message_id=queue_message_id)
+
+        try:
+            matches = await arun(db.get_all_unresolved_matches)
+        except Exception as exc:
+            log.error("Nem sikerült lekérni a nyitott meccseket rehydration közben: %s", exc)
+            matches = []
+
+        tourney_cache: dict[str, dict] = {t["id"]: t for t in tournaments}
+        for m in matches:
+            ticket_message_id = _to_int(m.get("ticket_message_id"))
+            if not ticket_message_id:
+                continue
+            tourney_id = m.get("tournament_id")
+            tourney = tourney_cache.get(tourney_id)
+            if not tourney:
+                tourney = await arun(db.get_tournament, tourney_id)
+                if tourney:
+                    tourney_cache[tourney_id] = tourney
+            if not tourney:
+                continue
+            view = MatchTicketView(m, tourney)
+            self.bot.add_view(view, message_id=ticket_message_id)
+
+        log.info(
+            "Rehydration kész: %d bajnokság queue view, %d meccs ticket view regisztrálva.",
+            len(tournaments),
+            sum(1 for m in matches if _to_int(m.get("ticket_message_id"))),
+        )
 
     # ==========================================
     # HÁTTÉRFELADATOK (LOOPS)
@@ -47,13 +109,16 @@ class TournamentsCog(commands.Cog):
         except Exception as exc:
             log.error("Hiba az auto_start_loop futása közben: %s", exc)
 
+    @auto_start_loop.before_loop
+    async def _before_auto_start(self):
+        await self.bot.wait_until_ready()
+
     @tasks.loop(minutes=15)
     async def auto_close_inactive_loop(self):
         """Háttérfeladat: 24 órája inaktív meccsek automatikus 0-0 FF lezárása."""
         try:
-            # Lekérjük az összes nyitott meccset
             running_tourneys = await arun(
-                lambda: db._client.table("tournaments").select("id").eq("status", "running").execute().data or []
+                lambda: db._client.table("tournaments").select("*").eq("status", "running").execute().data or []
             )
             for t in running_tourneys:
                 unresolved = await arun(db.get_unresolved_matches, t["id"])
@@ -61,42 +126,48 @@ class TournamentsCog(commands.Cog):
                     ticket_id = _to_int(match.get("ticket_channel_id"))
                     if not ticket_id:
                         continue
-                    
+
                     channel = self.bot.get_channel(ticket_id)
                     if isinstance(channel, discord.TextChannel):
-                        # Megkeressük az utolsó emberi üzenetet
                         last_human_msg = None
                         async for msg in channel.history(limit=50):
                             if not msg.author.bot:
                                 last_human_msg = msg
                                 break
-                        
+
                         now = datetime.now(timezone.utc)
-                        cutoff = now - timedelta(hours=24)
-                        
-                        # Ha nincs emberi üzenet, a csatorna létrehozási idejét vesszük alapul
+                        cutoff = now - timedelta(hours=MATCH_DEADLINE_HOURS)
+
                         ref_time = last_human_msg.created_at if last_human_msg else channel.created_at
-                        
+
                         if ref_time < cutoff:
                             log.info("Meccs inaktivitás miatt lezárva (24h+): match_id=%s", match["id"])
                             embed = discord.Embed(
                                 title="⏰ Automatikus Lezárás (Inaktivitás)",
-                                description="Mivel 24 órája nem érkezett emberi üzenet a csatornában, a meccs **0 - 0** eredménnyel zárult, és mindkét játékos **FF (Forfeit)** státuszt kapott.",
-                                color=discord.Color.red()
+                                description=(
+                                    "Mivel 24 órája nem érkezett emberi üzenet a csatornában, a meccs "
+                                    "**0 - 0** eredménnyel zárult, és mindkét játékos **FF (Forfeit)** "
+                                    "státuszt kapott."
+                                ),
+                                color=discord.Color.red(),
                             )
                             await channel.send(embed=embed)
-                            # Rögzítjük az adatbázisban a döntetlent/dupla FF-et (winner = 0)
-                            await arun(db.set_match_winner, match["id"], 0)
+                            await arun(db.set_match_winner, match["id"], 0, 0, 0, True)
                             await asyncio.sleep(5)
                             try:
                                 await channel.delete(reason="24 órás inaktivitás miatti automatikus törlés")
                             except discord.HTTPException:
                                 pass
+                            await self._maybe_advance_round(t)
         except Exception as exc:
             log.error("Hiba az auto_close_inactive_loop futása közben: %s", exc)
 
+    @auto_close_inactive_loop.before_loop
+    async def _before_auto_close(self):
+        await self.bot.wait_until_ready()
+
     # ==========================================
-    # SEGGÉDFÜGGVÉNYEK
+    # SEGÉDFÜGGVÉNYEK
     # ==========================================
 
     async def _get_member_safe(self, guild: discord.Guild, user_id: int) -> discord.Member | None:
@@ -124,25 +195,76 @@ class TournamentsCog(commands.Cog):
             resp = db._client.table("matches").select("*").eq("tournament_id", tournament_id).eq("round_number", round_num - 1).execute()
             if not resp or not resp.data:
                 return []
-            
+
             winners = []
             for match in resp.data:
                 w_id = _to_int(match.get("winner_discord_id"))
                 if not w_id or w_id == 0:
                     continue
-                
+
                 p1_id = _to_int(match.get("player1_discord_id"))
                 mc_name = match.get("player1_mc") if w_id == p1_id else match.get("player2_mc")
-                
+
                 winners.append({"discord_id": w_id, "minecraft_name": mc_name})
             return winners
 
         return await arun(_fetch)
 
+    async def _update_queue_message(self, tourney: dict) -> None:
+        """A queue embedet frissíti (állapot, forduló, stb.) minden forduló indulásakor."""
+        queue_message_id = _to_int(tourney.get("queue_message_id"))
+        if not queue_message_id:
+            return
+        guild = self.bot.get_guild(tourney.get("guild_id") or config.guild_id)
+        if not guild:
+            return
+        # Meg kell találni a csatornát, ahol a queue üzenet van. Mivel nincs
+        # elmentve a channel_id, végigmegyünk a szöveges csatornákon, amíg
+        # meg nem találjuk (cache-elt fetch_message olcsó a legtöbb esetben).
+        message = None
+        for channel in guild.text_channels:
+            try:
+                message = await channel.fetch_message(queue_message_id)
+                break
+            except (discord.NotFound, discord.Forbidden):
+                continue
+            except discord.HTTPException:
+                continue
+        if not message:
+            return
+        players = await arun(db.get_tournament_players, tourney["id"])
+        embed, _ = build_queue_embed(tourney, players, page=0)
+        try:
+            await message.edit(embed=embed)
+        except discord.HTTPException as exc:
+            log.warning("Nem sikerült frissíteni a queue üzenetet: %s", exc)
+
+    async def _maybe_advance_round(self, tourney: dict) -> None:
+        """Ha egy bajnokság aktuális fordulójának minden meccse lezárult,
+        automatikusan elindítja a következő fordulót (vagy lezárja a
+        bajnokságot, ha már csak egy győztes maradt)."""
+        tourney_id = tourney.get("id")
+        if not tourney_id:
+            return
+
+        async with self._lock_for(tourney_id):
+            fresh = await arun(db.get_tournament, tourney_id)
+            if not fresh or fresh.get("status") != "running":
+                return
+
+            current_round = _to_int(fresh.get("current_round")) or 1
+            unresolved = await arun(db.get_unresolved_matches, tourney_id)
+            unresolved_current = [m for m in unresolved if _to_int(m.get("round_number")) == current_round]
+            if unresolved_current:
+                return  # még van nyitott meccs ebben a fordulóban
+
+            msg = await self._start_round_logic(fresh, round_num=current_round + 1)
+            log.info("Automatikus forduló indítás (%s): %s", tourney_id, msg)
+
     async def _start_round_logic(self, tourney: dict, round_num: int = 1) -> str:
         tourney_id = tourney["id"]
         tourney_name = tourney.get("name", "Bajnokság")
-        
+
         if round_num == 1:
             raw_players = await arun(db.get_tournament_players, tourney_id)
             players = []
@@ -153,30 +275,44 @@ class TournamentsCog(commands.Cog):
                     players.append({"discord_id": d_id, "minecraft_name": mc_name})
         else:
             unresolved = await arun(db.get_unresolved_matches, tourney_id)
-            if unresolved:
-                return f"⚠️ Még {len(unresolved)} meccs nincs lezárva ebben a fordulóban! Előbb rögzítsétek az eredményeket."
-            
+            unresolved_prev = [m for m in unresolved if _to_int(m.get("round_number")) == round_num - 1]
+            if unresolved_prev:
+                return f"⚠️ Még {len(unresolved_prev)} meccs nincs lezárva ebben a fordulóban! Előbb rögzítsétek az eredményeket."
+
             players = await self._get_prev_round_winners(tourney_id, round_num)
 
         if len(players) < 2:
             if round_num == 1:
                 await arun(db.update_tournament, tourney_id, status="cancelled")
+                await self._update_queue_message({**tourney, "status": "cancelled"})
                 return "❌ A bajnokság törölve lett, mert nincs elég regisztrált játékos (min. 2 fő)."
             else:
                 await arun(db.update_tournament, tourney_id, status="completed")
+                updated_tourney = {**tourney, "status": "completed", "current_round": round_num - 1}
+                await self._update_queue_message(updated_tourney)
                 if len(players) == 1:
                     w = players[0]
-                    return f"🏆 A bajnokság véget ért! A győztes: <@{w['discord_id']}> (`{w['minecraft_name']}`)!"
+                    win_text = f"🏆 **A tournament győztese:** <@{w['discord_id']}> (`{w['minecraft_name']}`)"
+                    results_channel_id = tourney.get("results_channel_id") or config.results_channel_id
+                    guild = self.bot.get_guild(tourney.get("guild_id") or config.guild_id)
+                    if guild and results_channel_id:
+                        ch = guild.get_channel(results_channel_id)
+                        if isinstance(ch, discord.TextChannel):
+                            await ch.send(win_text)
+                    return win_text
                 return "❌ Nincs elég győztes a következő forduló elindításához."
 
         shuffled = players.copy()
         random.shuffle(shuffled)
 
         await arun(db.update_tournament, tourney_id, status="running", current_round=round_num)
+        tourney = {**tourney, "status": "running", "current_round": round_num}
 
         guild = self.bot.get_guild(tourney.get("guild_id") or config.guild_id)
         category_id = tourney.get("ticket_category_id") or config.ticket_category_id
         category = guild.get_channel(category_id) if guild and category_id else None
+
+        deadline_ts = int((datetime.now(timezone.utc) + timedelta(hours=MATCH_DEADLINE_HOURS)).timestamp())
 
         created_matches = 0
         for i in range(0, len(shuffled) - 1, 2):
@@ -200,7 +336,7 @@ class TournamentsCog(commands.Cog):
                             guild.default_role: discord.PermissionOverwrite(read_messages=False, send_messages=False),
                             guild.me: discord.PermissionOverwrite(read_messages=True, send_messages=True, manage_channels=True),
                         }
-                        
+
                         if u1:
                             overwrites[u1] = discord.PermissionOverwrite(read_messages=True, send_messages=True)
                         if u2:
@@ -208,10 +344,10 @@ class TournamentsCog(commands.Cog):
 
                         clean_p1 = "".join(c for c in p1_mc if c.isalnum() or c in "-_")
                         clean_p2 = "".join(c for c in p2_mc if c.isalnum() or c in "-_")
-                        
+
                         ticket_channel = await category.create_text_channel(
                             name=f"r{round_num}-{clean_p1[:8]}-vs-{clean_p2[:8]}",
-                            overwrites=overwrites
+                            overwrites=overwrites,
                         )
                     except discord.HTTPException as exc:
                         log.error("Discord API Hiba a csatorna létrehozásakor: %s", exc)
@@ -225,43 +361,23 @@ class TournamentsCog(commands.Cog):
                 player1_mc=p1_mc,
                 player2_mc=p2_mc,
                 ticket_channel_id=ticket_channel.id if ticket_channel else 0,
+                deadline=deadline_ts,
             )
 
             created_matches += 1
 
             if ticket_channel:
-                # ==========================================
-                # EXACT CUSTOM EMBED & TEXT FORMATTING
-                # ==========================================
                 content_text = f"<@{p1_id}> <@{p2_id}> elindult a meccsetek. Pingeljétek egymást is, hogy minél gyorsabban le tudjátok játszani."
+                embed = build_ticket_embed(tourney, match_data)
 
-                embed = discord.Embed(
-                    title=f"{tourney_name} - {round_num}. kör",
-                    description=(
-                        "Regulator használhatja az Eredmény, FF és Bezárás gombokat.\n"
-                        "Az FF modalban 0 = ff, 1 = nem ff.\n"
-                        "Ha 24 óráig nincs emberi üzenet a csatornában, a meccs automatikusan 0-0 és mindkét játékos ff lesz."
-                    ),
-                    color=discord.Color.gold()
-                )
-
-                embed.add_field(
-                    name="Párosítás",
-                    value=f"<@{p1_id}> vs <@{p2_id}>",
-                    inline=False
-                )
-
-                embed.add_field(
-                    name="In-game nevek",
-                    value=f"`{p1_mc}` vs `{p2_mc}`",
-                    inline=False
-                )
-
-                await ticket_channel.send(
+                sent = await ticket_channel.send(
                     content=content_text,
                     embed=embed,
-                    view=MatchTicketView(match_data, tourney)
+                    view=MatchTicketView(match_data, tourney),
                 )
+                await arun(db.set_match_ticket_message, match_data["id"], sent.id)
+
+        await self._update_queue_message(tourney)
 
         return f"✅ A(z) **{round_num}. forduló** elindult! ({created_matches} meccs/ticket létrehozva)."
 
@@ -270,7 +386,12 @@ class TournamentsCog(commands.Cog):
     # ==========================================
 
     @app_commands.command(name="tournamentqueue", description="Új bajnokság regisztráció nyitása.")
-    async def tournamentqueue(self, interaction: discord.Interaction, name: str, minutes: int):
+    @app_commands.describe(
+        name="A bajnokság neve",
+        minutes="Jelentkezési idő percben",
+        ft="Hány győzelemig tart egy meccs (Bo szám, alapértelmezett 1)",
+    )
+    async def tournamentqueue(self, interaction: discord.Interaction, name: str, minutes: int, ft: int = 1):
         try:
             await interaction.response.defer()
             end_time = discord.utils.utcnow() + discord.utils.timedelta(minutes=minutes)
@@ -284,21 +405,15 @@ class TournamentsCog(commands.Cog):
                 ticket_category_id=config.ticket_category_id,
                 results_channel_id=config.results_channel_id,
                 regulator_role_id=config.regulator_role_id,
+                ft=ft,
             )
             tourney_id = tourney_data["id"]
 
             view = TournamentQueueView(tourney_id)
-            embed = discord.Embed(
-                title=f"🏆 Bajnokság Regisztráció: {name}",
-                description=(
-                    f"Kattints a **✅ Belépés** gombra a jelentkezéshez!\n"
-                    f"⚠️ *Kizárólag összekapcsolt Minecraft fiókkal tudsz jelentkezni!*\n\n"
-                    f"**Jelentkezési határidő:** <t:{int(end_time.timestamp())}:R>"
-                ),
-                color=discord.Color.blue(),
-            )
+            embed, _ = build_queue_embed(tourney_data, [], page=0)
             msg = await interaction.followup.send(embed=embed, view=view)
             await arun(db.update_tournament, tourney_id, queue_message_id=msg.id)
+            self.bot.add_view(view, message_id=msg.id)
         except Exception as exc:
             log.error("Hiba a tournamentqueue parancsnál: %s", exc)
             await interaction.followup.send(f"❌ Hiba történt: `{exc}`", ephemeral=True)
@@ -306,14 +421,14 @@ class TournamentsCog(commands.Cog):
     @app_commands.command(name="tournamentround", description="Forduló kézi indítása vagy kezelése.")
     @app_commands.choices(action=[
         app_commands.Choice(name="start", value="start"),
-        app_commands.Choice(name="close", value="close")
+        app_commands.Choice(name="close", value="close"),
     ])
     async def tournamentround(
-        self, 
-        interaction: discord.Interaction, 
-        action: app_commands.Choice[str], 
-        tournament_id: str, 
-        round_number: int
+        self,
+        interaction: discord.Interaction,
+        action: app_commands.Choice[str],
+        tournament_id: str,
+        round_number: int,
     ):
         try:
             await interaction.response.defer(ephemeral=True)
@@ -331,6 +446,16 @@ class TournamentsCog(commands.Cog):
         except Exception as exc:
             log.error("Hiba a tournamentround parancsnál: %s", exc)
             await interaction.followup.send(f"❌ Hiba történt: `{exc}`", ephemeral=True)
+
+
+async def maybe_advance_round(bot: commands.Bot, tourney: dict) -> None:
+    """Modul-szintű belépési pont, amit a views.py hív meg (kör/körkörös
+    import elkerülése végett), miután egy meccs eredménye rögzítésre került."""
+    cog = bot.get_cog("TournamentsCog")
+    if cog is None:
+        log.warning("TournamentsCog nincs betöltve, nem tudom továbbléptetni a fordulót.")
+        return
+    await cog._maybe_advance_round(tourney)
 
 
 async def setup(bot: commands.Bot):

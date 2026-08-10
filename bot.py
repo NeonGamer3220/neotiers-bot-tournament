@@ -44,6 +44,15 @@ async def setup_hook():
 async def on_ready():
     log.info("Sikeres bejelentkezés: %s (ID: %s)", bot.user, bot.user.id)
 
+    # Restart utáni állapot-visszaállítás: az aktív bajnokságok queue
+    # gombjai és a nyitott meccs ticketek gombjai újra "élővé" válnak.
+    cog = bot.get_cog("TournamentsCog")
+    if cog is not None:
+        try:
+            await cog.rehydrate_views()
+        except Exception:
+            log.exception("Hiba történt a view-k rehydration-je közben.")
+
 
 def main():
     bot.run(config.discord_token)

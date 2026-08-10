@@ -140,6 +140,7 @@ class Database:
         regulator_role_id: int = 0,
         results_channel_id: int = 0,
         ticket_category_id: int = 0,
+        ft: int = 1,
     ) -> dict:
         """Insert a new tournament row in ``queued`` state.
 
@@ -168,6 +169,8 @@ class Database:
             "regulator_role_id": regulator_role_id,
             "results_channel_id": results_channel_id,
             "ticket_category_id": ticket_category_id,
+            "ft": ft,
+            "posted_at": int(_utcnow().timestamp()),
         }
         log.info("create_tournament payload=%s", payload)
         try:
@@ -386,6 +389,7 @@ class Database:
         player1_mc: str,
         player2_mc: str,
         ticket_channel_id: int,
+        deadline: Optional[int] = None,
     ) -> dict:
         """Insert a match row. Raises ``RuntimeError`` if RLS blocks the insert."""
         payload = {
@@ -397,7 +401,12 @@ class Database:
             "player1_mc": player1_mc,
             "player2_mc": player2_mc,
             "ticket_channel_id": ticket_channel_id,
+            "ticket_message_id": 0,
             "winner_discord_id": None,
+            "deadline": deadline,
+            "score1": None,
+            "score2": None,
+            "ff": False,
         }
         resp = self._client.table("matches").insert(payload).execute()
         if not resp.data:
@@ -406,6 +415,12 @@ class Database:
                 "(anon must have INSERT access)."
             )
         return resp.data[0]
+
+    def set_match_ticket_message(self, match_id: str, message_id: int) -> None:
+        """Record the ticket embed's message id, needed to rehydrate the view."""
+        self._client.table("matches").update(
+            {"ticket_message_id": message_id}
+        ).eq("id", match_id).execute()
 
     def get_match_by_ticket(self, ticket_channel_id: int) -> Optional[dict]:
         """Return a match joined with its tournament name, or ``None``."""
@@ -420,11 +435,23 @@ class Database:
             return None
         return resp.data
 
-    def set_match_winner(self, match_id: str, winner_discord_id: int) -> None:
-        """Record the winner of a match."""
+    def set_match_winner(
+        self,
+        match_id: str,
+        winner_discord_id: int,
+        score1: Optional[int] = None,
+        score2: Optional[int] = None,
+        ff: bool = False,
+    ) -> None:
+        """Record the winner (and optional score/FF flag) of a match."""
+        fields: dict[str, Any] = {"winner_discord_id": winner_discord_id, "ff": ff}
+        if score1 is not None:
+            fields["score1"] = score1
+        if score2 is not None:
+            fields["score2"] = score2
         resp = (
             self._client.table("matches")
-            .update({"winner_discord_id": winner_discord_id})
+            .update(fields)
             .eq("id", match_id)
             .execute()
         )
@@ -441,6 +468,16 @@ class Database:
             self._client.table("matches")
             .select("*")
             .eq("tournament_id", tournament_id)
+            .is_("winner_discord_id", "null")
+            .execute()
+        )
+        return list(resp.data or [])
+
+    def get_all_unresolved_matches(self) -> list[dict]:
+        """Return every open match across all tournaments (restart rehydration)."""
+        resp = (
+            self._client.table("matches")
+            .select("*")
             .is_("winner_discord_id", "null")
             .execute()
         )
