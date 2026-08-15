@@ -43,7 +43,7 @@ def build_queue_embed(tourney: dict, players: list[dict], page: int = 0) -> tupl
         f"**Belépés vége:** <t:{end_ts}:R>",
         f"**Pontos idő:** <t:{end_ts}:F>",
         f"**Állapot:** {status_label(status)}",
-        f"**FT:** Bo{ft}",
+        f"**FT:** FT{ft}",
     ]
     if status == "running" and current_round > 0:
         lines.append(f"**Jelenlegi forduló:** {current_round}.")
@@ -116,3 +116,51 @@ def build_ticket_embed(tourney: dict, match: dict) -> discord.Embed:
     embed.add_field(name="Állapot", value=state_label, inline=False)
 
     return embed
+
+
+def build_result_broadcast_text(tourney: dict, match: dict) -> str | None:
+    """Az adatbázisban eltárolt meccs-adatokból újraépíti a pontos
+    eredmény-üzenetet, amit a rögzítéskor az eredmény csatornába küldtünk
+    (vagy küldeni kellett volna). ``None``, ha a meccsnek még nincs eredménye.
+    """
+    winner_id = match.get("winner_discord_id")
+    if winner_id is None:
+        return None
+
+    round_num = int(match.get("round_number") or 1)
+    p1_mc = match.get("player1_mc") or "?"
+    p2_mc = match.get("player2_mc") or "?"
+    p1_id = match.get("player1_discord_id")
+    p2_id = match.get("player2_discord_id")
+    score1 = match.get("score1")
+    score2 = match.get("score2")
+    is_ff = bool(match.get("ff"))
+
+    winner_id = int(winner_id)
+
+    if winner_id == 0:
+        return (
+            f"**{round_num}. kör eredmény**\n\n"
+            f"`{p1_mc}` és `{p2_mc}` kézi lezárás miatt kiesett. Végső score: 0-0"
+        )
+
+    if is_ff:
+        if winner_id == p1_id:
+            winner_mc, loser_mc = p1_mc, p2_mc
+            w_score = score1 if score1 is not None else "?"
+            l_score = score2 if score2 is not None else "?"
+        else:
+            winner_mc, loser_mc = p2_mc, p1_mc
+            w_score = score2 if score2 is not None else "?"
+            l_score = score1 if score1 is not None else "?"
+        return (
+            f"**{round_num}. kör eredmény**\n\n"
+            f"`{winner_mc}` ff-fel jutott tovább `{loser_mc}` ellen. Végső score: {w_score}-{l_score}"
+        )
+
+    s1 = score1 if score1 is not None else "?"
+    s2 = score2 if score2 is not None else "?"
+    return (
+        f"**{round_num}. kör eredmény**\n\n"
+        f"`{p1_mc}` {s1} - {s2} `{p2_mc}` -> továbbjutott: <@{winner_id}>"
+    )

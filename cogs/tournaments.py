@@ -12,7 +12,7 @@ from discord.ext import commands, tasks
 
 from config import config
 from database import arun, db
-from embeds import build_queue_embed, build_ticket_embed
+from embeds import build_queue_embed, build_ticket_embed, build_result_broadcast_text
 from views import MatchTicketView, TournamentQueueView
 
 log = logging.getLogger("neontiers.tournaments")
@@ -394,7 +394,7 @@ class TournamentsCog(commands.Cog):
     async def tournamentqueue(self, interaction: discord.Interaction, name: str, minutes: int, ft: int = 1):
         try:
             await interaction.response.defer()
-            end_time = discord.utils.utcnow() + discord.utils.timedelta(minutes=minutes)
+            end_time = discord.utils.utcnow() + timedelta(minutes=minutes)
 
             tourney_data = await arun(
                 db.create_tournament,
@@ -416,6 +416,66 @@ class TournamentsCog(commands.Cog):
             self.bot.add_view(view, message_id=msg.id)
         except Exception as exc:
             log.error("Hiba a tournamentqueue parancsnál: %s", exc)
+            await interaction.followup.send(f"❌ Hiba történt: `{exc}`", ephemeral=True)
+
+    @app_commands.command(name="tournamentqueuepost", description="Egy bajnokság queue embedjének újraküldése (ha elromlott/eltűnt).")
+    @app_commands.describe(tournament_id="A bajnokság UUID-ja")
+    async def tournamentqueuepost(self, interaction: discord.Interaction, tournament_id: str):
+        try:
+            await interaction.response.defer()
+
+            tourney = await arun(db.get_tournament, tournament_id)
+            if not tourney:
+                await interaction.followup.send("❌ Nem található bajnokság ezzel az ID-val!", ephemeral=True)
+                return
+
+            players = await arun(db.get_tournament_players, tournament_id)
+            view = TournamentQueueView(tournament_id)
+            embed, _ = build_queue_embed(tourney, players, page=0)
+
+            msg = await interaction.followup.send(embed=embed, view=view)
+            await arun(db.update_tournament, tournament_id, queue_message_id=msg.id)
+            self.bot.add_view(view, message_id=msg.id)
+
+            log.info("Queue embed újraposztolva: tournament_id=%s új message_id=%s", tournament_id, msg.id)
+        except Exception as exc:
+            log.error("Hiba a tournamentqueuepost parancsnál: %s", exc)
+            await interaction.followup.send(f"❌ Hiba történt: `{exc}`", ephemeral=True)
+
+    @app_commands.command(name="tournamentresultpost", description="Egy meccs eredmény-üzenetének újraküldése az eredmény csatornába (nem válaszként).")
+    @app_commands.describe(match_id="A meccs UUID-ja")
+    async def tournamentresultpost(self, interaction: discord.Interaction, match_id: str):
+        try:
+            await interaction.response.defer(ephemeral=True)
+
+            match = await arun(db.get_match, match_id)
+            if not match:
+                await interaction.followup.send("❌ Nem található meccs ezzel az ID-val!", ephemeral=True)
+                return
+
+            tourney = await arun(db.get_tournament, match.get("tournament_id"))
+            if not tourney:
+                await interaction.followup.send("❌ Nem található a meccshez tartozó bajnokság!", ephemeral=True)
+                return
+
+            text = build_result_broadcast_text(tourney, match)
+            if text is None:
+                await interaction.followup.send("❌ Ennek a meccsnek még nincs rögzített eredménye.", ephemeral=True)
+                return
+
+            results_channel_id = tourney.get("results_channel_id") or config.results_channel_id
+            guild = self.bot.get_guild(tourney.get("guild_id") or config.guild_id)
+            channel = guild.get_channel(results_channel_id) if guild and results_channel_id else None
+            if not isinstance(channel, discord.TextChannel):
+                await interaction.followup.send("❌ Nem található az eredmény csatorna!", ephemeral=True)
+                return
+
+            # Fontos: sima send(), NEM reply/mention — önálló üzenetként megy ki.
+            await channel.send(text, allowed_mentions=discord.AllowedMentions(users=True))
+
+            await interaction.followup.send(f"✅ Eredmény újraposztolva ide: {channel.mention}", ephemeral=True)
+        except Exception as exc:
+            log.error("Hiba a tournamentresultpost parancsnál: %s", exc)
             await interaction.followup.send(f"❌ Hiba történt: `{exc}`", ephemeral=True)
 
     @app_commands.command(name="tournamentround", description="Forduló kézi indítása vagy kezelése.")

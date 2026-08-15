@@ -435,6 +435,19 @@ class Database:
             return None
         return resp.data
 
+    def get_match(self, match_id: str) -> Optional[dict]:
+        """Return a single match row by id, or ``None``."""
+        resp = (
+            self._client.table("matches")
+            .select("*")
+            .eq("id", match_id)
+            .maybe_single()
+            .execute()
+        )
+        if not resp or not resp.data:
+            return None
+        return resp.data
+
     def set_match_winner(
         self,
         match_id: str,

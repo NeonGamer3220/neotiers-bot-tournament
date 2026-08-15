@@ -54,6 +54,44 @@ async def on_ready():
             log.exception("Hiba történt a view-k rehydration-je közben.")
 
 
+@bot.command(name="sync")
+@commands.is_owner()
+async def sync_prefix_cmd(ctx: commands.Context):
+    """Szöveges (!sync) parancs — ezt nem kell szinkronizálni, tehát ezzel
+    lehet első alkalommal (vagy ha a slash /sync eltűnt) élesíteni az összes
+    slash parancsot, beleértve magát a /sync-et is."""
+    try:
+        if ctx.guild:
+            guild = discord.Object(id=ctx.guild.id)
+            bot.tree.copy_global_to(guild=guild)
+            synced = await bot.tree.sync(guild=guild)
+        else:
+            synced = await bot.tree.sync()
+        await ctx.send(f"✅ {len(synced)} slash parancs szinkronizálva.")
+    except Exception as exc:
+        log.exception("Hiba a !sync parancs futása közben.")
+        await ctx.send(f"❌ Hiba történt: `{exc}`")
+
+
+@bot.tree.command(name="sync", description="Slash parancsok azonnali szinkronizálása (csak adminoknak).")
+@discord.app_commands.default_permissions(administrator=True)
+async def sync_cmd(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=True)
+    try:
+        if interaction.guild_id:
+            guild = discord.Object(id=interaction.guild_id)
+            bot.tree.copy_global_to(guild=guild)
+            synced = await bot.tree.sync(guild=guild)
+        else:
+            synced = await bot.tree.sync()
+        await interaction.followup.send(
+            f"✅ {len(synced)} slash parancs szinkronizálva.", ephemeral=True
+        )
+    except Exception as exc:
+        log.exception("Hiba a /sync parancs futása közben.")
+        await interaction.followup.send(f"❌ Hiba történt: `{exc}`", ephemeral=True)
+
+
 def main():
     bot.run(config.discord_token)
 
